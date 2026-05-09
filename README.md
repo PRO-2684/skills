@@ -2,5 +2,5 @@
 
 My personal skills gallery.
 
-- [Dependency Archaeology](./dependency-archaeology): Resolve dependency conflicts and make project environments reproducible
+- [Dependency Archaeology](./skills/dependency-archaeology): Resolve dependency conflicts and make project environments reproducible
 
