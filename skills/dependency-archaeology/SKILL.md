@@ -1,9 +1,9 @@
 ---
-name: reproduce-environment
-description: Resolve dependency conflicts and make project environments reproducible by discovering existing Docker, Conda, pip, uv, Poetry, PDM, npm/yarn/pnpm, or other environment/dependency files; pin exact package versions; regenerate or verify lockfiles; and ask the user before creating a new environment specification when none exists. Use when Codex is asked to fight local environment problems, fix dependency installation failures, pin versions, repair broken lockfiles, or make setup repeatable across machines, containers, or CI.
+name: dependency-archaeology
+description: Resolve dependency conflicts and make project environments reproducible by discovering existing Docker, Conda, pip, uv, Poetry, PDM, npm/yarn/pnpm, or other environment/dependency files; pin exact package versions; regenerate or verify lockfiles; protect git-untracked environment/code changes by warning and asking before editing them; and ask the user before creating a new environment specification when none exists. Use when Codex is asked to fight local environment problems, investigate dependency history, fix dependency installation failures, pin versions, repair broken lockfiles, or make setup repeatable across machines, containers, or CI.
 ---
 
-# Reproduce Environment
+# Dependency Archaeology
 
 ## Workflow
 
@@ -20,6 +20,10 @@ description: Resolve dependency conflicts and make project environments reproduc
      when both exist; otherwise prefer the file documented by README/CI/devcontainer.
    - Note tool versions when encoded in files, such as Python, Node, CUDA, Conda,
      base Docker image tags, package manager versions, or `.tool-versions`.
+   - Check `git status --short` and whether candidate environment files are tracked.
+     Warn and ask before changing environment files, lockfiles, scripts, or code that
+     git will not record, such as untracked files, ignored files, generated files
+     outside the repository, or files in an unversioned virtual environment.
 
 2. If no dependency or environment file exists, stop and ask the user how to proceed.
    - Briefly list what was searched.
@@ -66,12 +70,25 @@ description: Resolve dependency conflicts and make project environments reproduc
    - If the repository has Docker/devcontainer/CI setup, ensure the pinned files and
      lockfiles are the ones those paths consume.
 
+6. Prepare the handoff.
+   - If the environment was successfully reproduced, the relevant tests passed, and
+     the user has nothing staged, stage the dependency/environment changes and provide
+     a concise commit message.
+   - If the user already has staged changes, do not alter the index. Report the
+     unstaged changes this work produced and provide a commit message the user can use.
+   - If reproduction or tests did not pass, do not stage changes unless the user
+     explicitly asks.
+
 ## Output Expectations
 
 - State which environment files were found and which one is canonical.
 - Explain the conflict root cause in terms of exact packages and version constraints.
 - List changed files and why each change is needed.
+- Mention any untracked or ignored files that were intentionally left untouched or
+  edited with user approval.
 - Include the verification commands run and their result, distinguishing minimal
   reproducible tests from any skipped long-running commands.
+- State whether changes were staged, and include the proposed commit message when
+  staging criteria are met.
 - If exact reproducibility cannot be achieved, identify the remaining unpinned inputs
   such as OS packages, base image tags, system drivers, CUDA, Python, or Node.
