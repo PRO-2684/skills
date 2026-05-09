@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dependency Archaeology"
+  short_description: "Resolve and pin project dependencies"
+  default_prompt: "Use $dependency-archaeology to diagnose dependency conflicts and produce a reproducible project environment."
