@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cyber Mysophobia"
+  short_description: "Aggressive modernization and API cleanup"
+  default_prompt: "Use $cyber-mysophobia to redesign this code with clean APIs, modern dependencies, and no compatibility baggage."

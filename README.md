@@ -12,6 +12,8 @@ $skill-installer PRO-2684/skills slug1 slug2
 
 ## List
 
-| Name | Slug | Desc |
-| - | - | - |
-| [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible |
+| Name | Slug | Desc | Pic? |
+| - | - | - | - |
+| [Cyber Mysophobia](./skills/cyber-mysophobia) | `cyber-mysophobia` | Prefer idiomatic and modern approaches, disregarding compatibility | N/A |
+| [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | ![dependency-archaeology](./images/dependency-archaeology.png) |
+
