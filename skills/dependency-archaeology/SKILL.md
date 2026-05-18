@@ -5,6 +5,18 @@ description: Resolve dependency conflicts and make project environments reproduc
 
 # Dependency Archaeology
 
+## Policies
+
+- Treat monkey-patch compatibility hacks as black magic. Examples include assigning
+  removed APIs back onto newer libraries, such as `numpy.float = float`, to keep old
+  packages running.
+- Use black magic only when there is no practical resolver, pin, downgrade, upstream
+  patch, or maintained replacement that can satisfy the project constraints.
+- When black magic is unavoidable, make the exact process reproducible through a
+  tracked Dockerfile, script, patch file, or documented command sequence as a last
+  resort. Ensure the workaround itself is recorded in git, not left as manual local
+  state or an untracked virtualenv mutation.
+
 ## Workflow
 
 1. Inventory the repository before changing anything.
@@ -40,6 +52,11 @@ description: Resolve dependency conflicts and make project environments reproduc
    - Capture the first real conflict, not just the final summary. Look for incompatible
      version ranges, missing wheels, unsupported Python/Node versions, platform markers,
      CUDA or system-library constraints, and stale transitive pins.
+   - When suspicious network failures occur, check proxy environment variables such as
+     `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and lowercase variants. If
+     they are set, unset them and retry once. If no proxy variables are present or the
+     retry still fails, try appropriate package mirrors before treating the dependency
+     graph as broken.
    - If network access or approvals block verification, report that explicitly and
      continue with static analysis only when useful.
 
@@ -88,6 +105,8 @@ description: Resolve dependency conflicts and make project environments reproduc
   edited with user approval.
 - Include the verification commands run and their result, distinguishing minimal
   reproducible tests from any skipped long-running commands.
+- If black magic was used, explain why normal dependency resolution was insufficient
+  and identify the tracked file that makes the workaround reproducible.
 - State whether changes were staged, and include the proposed commit message when
   staging criteria are met.
 - If exact reproducibility cannot be achieved, identify the remaining unpinned inputs
