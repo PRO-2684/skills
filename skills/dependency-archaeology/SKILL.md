@@ -7,15 +7,11 @@ description: Resolve dependency conflicts and make project environments reproduc
 
 ## Policies
 
-- Treat monkey-patch compatibility hacks as black magic. Examples include assigning
-  removed APIs back onto newer libraries, such as `numpy.float = float`, to keep old
-  packages running.
-- Use black magic only when there is no practical resolver, pin, downgrade, upstream
-  patch, or maintained replacement that can satisfy the project constraints.
-- When black magic is unavoidable, make the exact process reproducible through a
-  tracked Dockerfile, script, patch file, or documented command sequence as a last
-  resort. Ensure the workaround itself is recorded in git, not left as manual local
-  state or an untracked virtualenv mutation.
+- Black magic = error-prone monkey patches, e.g. `numpy.float = float` for old packages
+  on new NumPy. Use only when pins, downgrades, patches, or replacements cannot work.
+- If black magic is unavoidable, make it reproducible and git-tracked via Dockerfile,
+  script, patch file, or documentation as last resort. Never leave it as manual local
+  state or untracked virtualenv mutation.
 
 ## Workflow
 
@@ -52,11 +48,9 @@ description: Resolve dependency conflicts and make project environments reproduc
    - Capture the first real conflict, not just the final summary. Look for incompatible
      version ranges, missing wheels, unsupported Python/Node versions, platform markers,
      CUDA or system-library constraints, and stale transitive pins.
-   - When suspicious network failures occur, check proxy environment variables such as
-     `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and lowercase variants. If
-     they are set, unset them and retry once. If no proxy variables are present or the
-     retry still fails, try appropriate package mirrors before treating the dependency
-     graph as broken.
+   - For suspicious network failures: check proxy env vars (`HTTP_PROXY`,
+     `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, plus lowercase). If set, unset and retry.
+     Otherwise try mirrors before blaming dependencies.
    - If network access or approvals block verification, report that explicitly and
      continue with static analysis only when useful.
 
@@ -105,8 +99,7 @@ description: Resolve dependency conflicts and make project environments reproduc
   edited with user approval.
 - Include the verification commands run and their result, distinguishing minimal
   reproducible tests from any skipped long-running commands.
-- If black magic was used, explain why normal dependency resolution was insufficient
-  and identify the tracked file that makes the workaround reproducible.
+- If black magic was used, explain why and name the tracked reproducibility file.
 - State whether changes were staged, and include the proposed commit message when
   staging criteria are met.
 - If exact reproducibility cannot be achieved, identify the remaining unpinned inputs
