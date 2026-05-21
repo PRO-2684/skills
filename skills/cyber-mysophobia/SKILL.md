@@ -29,6 +29,10 @@ Prefer clean target design over compatibility. Delete rot. Break old contracts w
 5. Update tests for new contract.
 6. Run formatter, linter, type checker, relevant tests.
 
+## Sub-Guidelines
+
+Language-specific sub-guidelines under `langs/`, with slug as file stem. List and read based on project language.
+
 ## Communication
 
 State target design, deletions, breaking changes, verification, remaining explicit failures.
