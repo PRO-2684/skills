@@ -19,3 +19,26 @@
 
 - Prefer proper package layout, editable install, test runner config, or `PYTHONPATH` set by tooling.
 - If path insertion unavoidable, isolate it, comment exact reason, and remove once packaging fixed.
+
+## API design
+
+- Prefer methods over free functions
+	- Good:
+
+        ```python
+        class MyData:
+            @staticmethod
+            def load(...) -> Self:
+                ...
+            # classmethod is also accepted
+        ```
+
+    - Bad:
+
+        ```python
+        class MyData:
+            ...
+        def load_data(...) -> MyData:
+            ...
+        ```
+
