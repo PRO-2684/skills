@@ -42,3 +42,23 @@
             ...
         ```
 
+- Prefer typed over untyped
+    - Good:
+
+        ```python
+        @dataclass
+        class Entry:
+            id: str
+            data: list[int]
+
+        # In some function...
+        return Entry(...)
+        ```
+
+    - Bad:
+
+        ```python
+        # In some function
+        return { "id": ..., "data": ... }
+        ```
+
