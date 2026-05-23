@@ -22,7 +22,7 @@
 
 ## API design
 
-- Prefer methods over free functions
+- Prefer methods over free functions.
 	- Good:
 
         ```python
@@ -42,23 +42,23 @@
             ...
         ```
 
-- Prefer typed over untyped
-    - Good:
+- Prefer typed over untyped.
+    - Good: Use `dataclass`, `TypedDict`, pydantic or others to type data (choose the method that fits best):
 
         ```python
         @dataclass
         class Entry:
             id: str
             data: list[int]
-
-        # In some function...
+        # ...
         return Entry(...)
         ```
 
-    - Bad:
+    - Bad: Use untyped dict / object:
 
         ```python
-        # In some function
         return { "id": ..., "data": ... }
         ```
+
+- Prefer explicit over implicit.
 
