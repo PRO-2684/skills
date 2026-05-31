@@ -20,10 +20,14 @@
 - Prefer proper package layout, editable install, test runner config, or `PYTHONPATH` set by tooling.
 - If path insertion unavoidable, isolate it, comment exact reason, and remove once packaging fixed.
 
-## API design
+## Imports
 
-- Prefer methods over free functions.
-	- Good:
+- Avoid `from module import *`; import explicit names.
+
+## API Design
+
+- Put type-owned behavior on the type via `@staticmethod` or `@classmethod` unless a private helper is clearer.
+    - Good:
 
         ```python
         class MyData:
@@ -61,4 +65,3 @@
         ```
 
 - Prefer explicit over implicit.
-

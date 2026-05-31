@@ -1,13 +1,13 @@
 # Rust
 
-## `use`
+## Imports
 
-- Avoid `use xxx::*`, even when libraries suggest `use some_lib::prelude::*`.
+- Avoid `use xxx::*`, even when libraries suggest `use some_lib::prelude::*`; import explicit names.
 
-## API design
+## API Design
 
-- Prefer methods over free functions, with the exception of private helper functions.
-	- Good:
+- Put type-owned behavior in `impl` blocks.
+    - Good:
 
         ```rust
         pub struct MyData { ... }
@@ -22,4 +22,3 @@
         pub struct MyData { ... }
         pub fn load_data(...) -> MyData { ... }
         ```
-
