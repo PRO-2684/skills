@@ -63,6 +63,8 @@ description: Resolve dependency conflicts and make project environments reproduc
    - Avoid broad upgrades, deleting constraints, or mixing package managers unless the
      existing setup is already mixed and documented.
    - Keep platform-specific constraints explicit with markers rather than hiding them.
+   - Verify candidate versions with the package index or native resolver. Do not rely
+     on memory for current package availability or compatibility.
 
 5. Regenerate and verify the reproducible artifact.
    - Use the native resolver to update lockfiles. Examples:
@@ -80,6 +82,8 @@ description: Resolve dependency conflicts and make project environments reproduc
      the expected command and why the minimal repro is sufficient.
    - If the repository has Docker/devcontainer/CI setup, ensure the pinned files and
      lockfiles are the ones those paths consume.
+   - If install verification is too slow or blocked, run the resolver first. Report
+     that install was skipped and give the exact install command for the user.
 
 6. Prepare the handoff.
    - If the environment was successfully reproduced, the relevant tests passed, and
