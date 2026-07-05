@@ -23,6 +23,7 @@
 ## Imports
 
 - Avoid `from module import *`; import explicit names.
+- Avoid import checking (`try: import xxx`), if the environment spec already requires the library.
 
 ## API Design
 
