@@ -42,6 +42,7 @@ Clean target shape wins over legacy continuity unless user explicitly requires c
 - Prefer typed domain objects over untyped maps, loose objects, or implicit structure.
 - Avoid wildcard imports/import-all forms; import explicit names unless language tooling makes that impractical.
 - Prefer explicit contracts over dynamic lookup, reflection, magic defaults, or convention-only coupling.
+- For CLI args, prefer dashed form (`--model-path`) over underlined form (`--model_path`).
 
 ## Workflow
 
