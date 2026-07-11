@@ -24,6 +24,12 @@
 
 - Avoid `from module import *`; import explicit names.
 - Avoid import checking (`try: import xxx`), if the environment spec already requires the library.
+- Avoid `__import__` or `importlib` - use `import xxx` directly.
+- Keep imports at the beginning.
+
+## Typing
+
+- Avoid `Any`.
 
 ## API Design
 
