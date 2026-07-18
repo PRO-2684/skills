@@ -22,3 +22,12 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
 | --------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
 | [Cyber Mysophobia](./skills/cyber-mysophobia)             | `cyber-mysophobia`       | Prefer idiomatic and modern approaches, disregarding compatibility      | ![cyber-mysophobia](./images/cyber-mysophobia.png)             |
 | [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | ![dependency-archaeology](./images/dependency-archaeology.png) |
+
+## Imported Skills
+
+Imported from [mattpocock/skills](https://github.com/mattpocock/skills), before the skills became dependent on others:
+
+- [grill-with-docs](./imported/grill-with-docs)
+- [handoff](./imported/handoff)
+- [improve-codebase-architecture](./imported/improve-codebase-architecture)
+- [setup-matt-pocock-skills](./imported/setup-matt-pocock-skills)
