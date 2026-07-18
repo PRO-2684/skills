@@ -7,13 +7,19 @@ My personal skills gallery. Primarily used with Codex. Should also work with oth
 To install skills on Codex:
 
 ```
-$skill-installer Install from PRO-2684/skills, path skills/slug
+$skill-installer Install from PRO-2684/skills, path skills/cyber-mysophobia
 ```
 
 Or using the script directly:
 
 ```bash
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo PRO-2684/skills --path skills/slug
+python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py --repo PRO-2684/skills --path skills/cyber-mysophobia
+```
+
+Alternatively, clone this repo and link the skills:
+
+```bash
+ln -s path/to/repo/skills/cyber-mysophobia ~/.codex/skills/cyber-mysophobia
 ```
 
 ## List
