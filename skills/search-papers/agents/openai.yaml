@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search Papers"
+  short_description: "Find conference papers and arXiv preprints"
+  default_prompt: "Use $search-papers to find papers about this research topic."
