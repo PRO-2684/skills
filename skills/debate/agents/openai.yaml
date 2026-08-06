@@ -1,0 +1,7 @@
+interface:
+  display_name: "Debate"
+  short_description: "Challenge assumptions and reach shared conclusions"
+  default_prompt: "Use $debate to challenge my position and seek a shared conclusion."
+
+policy:
+  allow_implicit_invocation: true

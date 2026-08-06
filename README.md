@@ -27,6 +27,7 @@ ln -s path/to/repo/skills/cyber-mysophobia ~/.codex/skills/cyber-mysophobia
 | Name                                                      | Slug                     | Desc                                                                    | Pic?                                                           |
 | --------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
 | [Cyber Mysophobia](./skills/cyber-mysophobia)             | `cyber-mysophobia`       | Prefer idiomatic and modern approaches, disregarding compatibility      | ![cyber-mysophobia](./images/cyber-mysophobia.png)             |
+| [Debate](./skills/debate)                                 | `debate`                 | Challenge assumptions and reach shared conclusions                      | ![debate](./images/debate.png)                                 |
 | [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | ![dependency-archaeology](./images/dependency-archaeology.png) |
 | [Search Papers](./skills/search-papers)                    | `search-papers`          | Find conference papers before arXiv preprints                           | ![search-papers](./images/search-papers.png)                   |
 
