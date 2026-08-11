@@ -20,7 +20,9 @@ Prefer peer-reviewed conference papers. Use arXiv-only preprints as secondary ev
      curl -fsSL 'https://huggingface.co/spaces/ai-conferences/conference-paper-search/agents.md'
      ```
      Do not add `raw/main`, `resolve/main`, or `blob/main`; this is an app route,
-     not a repo file. If fetch fails, report failure; do not guess another path.
+     not a repo file. If fetch fails, use
+     [bundled snapshot](references/conference-paper-search-agents.md); do not
+     guess another path. Always fetch live API schema; stop if unavailable.
    - Make an authenticated Space API request. Treat `401`, `403`, or an explicit
      inference-permission error as missing inference access. Give same warning
      once per session, then stop and await user choice.
