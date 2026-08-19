@@ -11,39 +11,31 @@ Purpose: Search accepted ML conference papers.
 
 ### `/search` input contract
 
-- `query` (string, default: `""`)
-- `mode` (string, default: `"semantic"`, supports `semantic` and `keyword`)
-- `conferences` (null or array[string], default: `null`)
-    - `3DV`
-    - `AAAI`
-    - `ACL`
-    - `COLM`
-    - `CVPR`
-    - `ECCV`
-    - `EMNLP`
-    - `ICASSP`
-    - `ICCV`
-    - `ICLR`
-    - `ICML`
-    - `ICRA`
-    - `Interspeech`
-    - `MICCAI`
-    - `NAACL`
-    - `NeurIPS`
-    - `SIGGRAPH`
-    - `SIGGRAPHAsia`
-    - `WACV`
-- `year_min` (null or integer, default: `null`)
-- `year_max` (null or integer, default: `null`)
-- `types` (null or array[string], default: `null`)
-    - `poster`
-    - `spotlight`
-    - `oral`
-    - `notable-top-25%`
-    - `notable-top-5%`
-    - `talk`
-- `sort` (string, default: `"relevance"`)
-    - `relevance`
-    - `newest`
-    - `upvotes` (HF upvotes)
-- `limit` (integer, default: `200`)
+- `query`: Search query.
+    - Type: `string`
+    - Default: (empty)
+- `mode`: Search mode.
+    - Type: `string`
+    - Default: `semantic`
+    - Accepted values: `semantic`, `keyword`
+- `conferences`: Conference filters.
+    - Type: `null` or `array[string]`
+    - Default: `null` (search all available conferences)
+    - Accepted values: `3DV`, `AAAI`, `ACL`, `COLM`, `CVPR`, `ECCV`, `EMNLP`, `ICASSP`, `ICCV`, `ICLR`, `ICML`, `ICRA`, `Interspeech`, `MICCAI`, `NAACL`, `NeurIPS`, `SIGGRAPH`, `SIGGRAPHAsia`, `WACV`
+- `year_min`: Filter by earliest publication year.
+    - Type: `null` or `integer`
+    - Default: `null`
+- `year_max`: Filter by latest publication year.
+    - Type: `null` or `integer`
+    - Default: `null`
+- `types`: Filter by presentation type.
+    - Type: `null` or `array[string]`
+    - Default: `null` (search all available types)
+    - Accepted values: `poster`, `spotlight`, `oral`, `notable-top-25%`, `notable-top-5%`, `talk`
+- `sort`: Result ordering.
+    - Type: `string`
+    - Default: `relevance`
+    - Accepted values: `relevance`, `newest`, `upvotes` (HF upvotes)
+- `limit`: Maximum results to return.
+    - Type: `integer`
+    - Default: `200`
