@@ -18,6 +18,7 @@ Purpose: Search accepted ML conference papers.
     - Type: `string`
     - Default: `semantic`
     - Accepted values: `semantic`, `keyword`
+    - Note: Invalid values fallback to `keyword`
 - `conferences`: Conference filters.
     - Type: `null` or `array[string]`
     - Default: `null` (search all available conferences)
