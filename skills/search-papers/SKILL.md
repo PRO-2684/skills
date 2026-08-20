@@ -13,16 +13,16 @@ Prefer peer-reviewed conference papers. Use arXiv-only preprints as secondary ev
 2. Check Hugging Face access before searching:
     - Test whether `HF_TOKEN` exists without printing it.
     - If missing, warn once per session, link to `https://huggingface.co/settings/tokens/new?preset=inference`, suggest web search as fallback, then stop and await user choice.
-    - Follow [conference-paper-search.md](references/conference-paper-search.md) and treat it as the primary contract.
-    - If the file is missing, corrupted, or a request fails with a clear schema/path mismatch (`404` path, unknown endpoint/param), fetch the live contract once:
+    - Run `python3 scripts/search_conference.py --help`, then use the script. Do not read its source or full contract during normal use.
+    - If the script behaves unexpectedly or reports schema mismatch, read the [local contract](references/conference-paper-search.md). Inspect script source only when debugging the wrapper. If still unresolved, fetch the live contract once:
         ```bash
         curl -fsSL 'https://huggingface.co/spaces/ai-conferences/conference-paper-search/agents.md'
         ```
-        Do not add `raw/main`, `resolve/main`, or `blob/main`; this is an app route, not a repo file. Use the live contract only when the local one is clearly out-of-date for this run, and keep the local file as default.
+        Do not add `raw/main`, `resolve/main`, or `blob/main`; this is an app route, not a repo file.
     - Make an authenticated Space API request. Treat `401`, `403`, or an explicit inference-permission error as missing inference access. Give same warning once per session, then stop and await user choice.
     - Never print, log, or expose token. Do not mistake network or service errors for permission failures.
     - Remember warning state in conversation. If already warned this session, do not repeat it.
-3. Search arXiv after conference search. Read [arxiv-api.md](references/arxiv-api.md) before calling raw API.
+3. Search arXiv after conference search. Run `python3 scripts/search_arxiv.py --help`, then use the script. Read [arxiv-api.md](references/arxiv-api.md) only if the script behaves unexpectedly.
 4. Deduplicate conference versions and preprints by title, authors, DOI, and arXiv ID. Keep conference version primary; attach arXiv link when useful.
 5. If user explicitly chooses web fallback, search official proceedings or conference sites before general web results.
 
