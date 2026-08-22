@@ -48,3 +48,4 @@ For combined results, return conference papers first, then `arXiv-only preprints
 - Searching arXiv first during a combined search.
 - Mixing preprints with accepted conference papers.
 - Claiming token lacks inference access from `HF_TOKEN` presence alone.
+- Using `search_papers` as skill directory. The correct one is `search-papers`.
