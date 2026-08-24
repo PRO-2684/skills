@@ -32,6 +32,11 @@ app-server: pass `--remote ADDR` and optional `--remote-auth-token-env NAME`.
 Report returned wait ID and `delivery_assumption`, then end turn. Never poll from
 later agent turns.
 
+Before ending the registration turn, consider leaving a concise status summary
+visible to the user: what is running or being awaited, wait ID, estimated
+completion when known, timeout when configured, retry policy when applicable,
+and delivery assumption. Do not invent an estimate.
+
 Wake format:
 
 ```text
