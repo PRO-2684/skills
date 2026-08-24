@@ -16,10 +16,10 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, cast
+from typing import Dict, Iterator, List, Optional, cast
 
 
-JsonObject = dict[str, object]
+JsonObject = Dict[str, object]
 TERMINAL_STATES = {"delivered", "cancelled"}
 
 
@@ -225,6 +225,7 @@ def preflight(thread_id: str, delivery: JsonObject) -> str:
         thread = response.get("thread")
         if not isinstance(thread, dict):
             raise RuntimeError("thread/read omitted thread")
+        thread = cast(JsonObject, thread)
         source = thread.get("source")
         if thread.get("ephemeral"):
             raise RuntimeError("ephemeral thread cannot receive durable input")
@@ -352,7 +353,7 @@ def after_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
     return {"kind": "after", "status": 0, "elapsed_seconds": seconds}
 
 
-def stop_process(process: subprocess.Popen[object]) -> None:
+def stop_process(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -375,8 +376,8 @@ def timeout_result(started: float, attempt: int) -> JsonObject:
 
 
 def run_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
-    command = cast(list[str], spec["command"])
-    timeout = cast(float | None, spec["timeout"])
+    command = cast(List[str], spec["command"])
+    timeout = cast(Optional[float], spec["timeout"])
     max_retries = int(cast(int, spec["max_retries"]))
     retry_delay = float(cast(float, spec["retry_delay"]))
     started = time.time()
@@ -491,12 +492,14 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
-        delivery = lambda: delivery_value(args.remote, args.remote_auth_token_env)
+        def selected_delivery() -> JsonObject:
+            return delivery_value(args.remote, args.remote_auth_token_env)
+
         if args.action == "probe":
-            emit(register("probe", {}, args.message, delivery()))
+            emit(register("probe", {}, args.message, selected_delivery()))
         elif args.action == "after":
             spec: JsonObject = {"seconds": args.duration, "registered_at": time.time()}
-            emit(register("after", spec, args.message, delivery()))
+            emit(register("after", spec, args.message, selected_delivery()))
         elif args.action == "run":
             spec = {
                 "command": command_value(args.command),
@@ -504,7 +507,7 @@ def main() -> int:
                 "max_retries": args.max_retries,
                 "retry_delay": args.retry_delay,
             }
-            emit(register("run", spec, args.message, delivery()))
+            emit(register("run", spec, args.message, selected_delivery()))
         elif args.action == "list":
             records = [load_record(path.stem) for path in state_dir().glob("*.json")]
             records.sort(key=lambda item: float(cast(float, item["created_at"])), reverse=True)
@@ -523,4 +526,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
