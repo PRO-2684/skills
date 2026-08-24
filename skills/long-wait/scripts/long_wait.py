@@ -1,56 +1,26 @@
 #!/usr/bin/env python3
-"""Register detached waits and wake the originating Codex thread."""
+"""Wait outside agent turns, then queue input to originating Codex thread."""
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
 import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Iterator, cast
 
 
+JsonObject = dict[str, object]
 TERMINAL_STATES = {"delivered", "cancelled"}
-DELIVERY_RETRY_STATES = {"delivery_failed", "delivery_unknown"}
-SLURM_FAILURE_STATES = {
-    "BOOT_FAIL",
-    "CANCELLED",
-    "DEADLINE",
-    "FAILED",
-    "NODE_FAIL",
-    "OUT_OF_MEMORY",
-    "PREEMPTED",
-    "REVOKED",
-    "SPECIAL_EXIT",
-    "TIMEOUT",
-}
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS waits (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    spec_json TEXT NOT NULL,
-    message TEXT NOT NULL,
-    client_message_id TEXT NOT NULL UNIQUE,
-    state TEXT NOT NULL,
-    pid INTEGER,
-    created_at REAL NOT NULL,
-    started_at REAL,
-    condition_at REAL,
-    delivered_at REAL,
-    result_json TEXT,
-    error TEXT,
-    log_path TEXT NOT NULL
-)
-"""
 
 
 class RpcError(RuntimeError):
@@ -59,38 +29,91 @@ class RpcError(RuntimeError):
 
 def state_dir() -> Path:
     codex_home = os.environ.get("CODEX_HOME")
-    base = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
-    value = base / "long-waits"
-    value.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    path = root / "long-waits"
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return path
+
+
+def checked_id(wait_id: str) -> str:
+    return str(uuid.UUID(wait_id))
+
+
+def record_path(wait_id: str) -> Path:
+    return state_dir() / f"{checked_id(wait_id)}.json"
+
+
+@contextmanager
+def record_lock(wait_id: str) -> Iterator[None]:
+    path = state_dir() / f"{checked_id(wait_id)}.lock"
+    with path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def load_unlocked(wait_id: str) -> JsonObject:
+    path = record_path(wait_id)
+    if not path.exists():
+        raise ValueError(f"unknown wait ID: {wait_id}")
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError(f"invalid wait record: {wait_id}")
+    return cast(JsonObject, value)
+
+
+def load_record(wait_id: str) -> JsonObject:
+    with record_lock(wait_id):
+        return load_unlocked(wait_id)
+
+
+def save_unlocked(record: JsonObject) -> None:
+    path = record_path(str(record["id"]))
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+
+
+def create_record(record: JsonObject) -> None:
+    wait_id = str(record["id"])
+    with record_lock(wait_id):
+        if record_path(wait_id).exists():
+            raise RuntimeError(f"wait already exists: {wait_id}")
+        save_unlocked(record)
+
+
+def update_record(
+    wait_id: str,
+    fields: JsonObject,
+    expected: set[str] | None = None,
+) -> JsonObject | None:
+    with record_lock(wait_id):
+        record = load_unlocked(wait_id)
+        if expected and record.get("state") not in expected:
+            return None
+        record.update(fields)
+        save_unlocked(record)
+        return record
+
+
+def pid_alive(value: object) -> bool:
+    if not isinstance(value, int) or value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def public_record(record: JsonObject) -> JsonObject:
+    value = dict(record)
+    value["worker_alive"] = pid_alive(record.get("pid"))
     return value
 
 
-def database_path() -> Path:
-    return state_dir() / "waits.sqlite3"
-
-
-def connect() -> sqlite3.Connection:
-    connection = sqlite3.connect(database_path(), timeout=10)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA busy_timeout=10000")
-    connection.execute(SCHEMA)
-    connection.commit()
-    return connection
-
-
-def row_dict(row: sqlite3.Row) -> dict[str, Any]:
-    value = dict(row)
-    for field in ("spec_json", "result_json"):
-        if value.get(field):
-            value[field.removesuffix("_json")] = json.loads(value.pop(field))
-        else:
-            value.pop(field, None)
-    value["worker_alive"] = pid_alive(value.get("pid"))
-    return value
-
-
-def emit(value: Any) -> None:
+def emit(value: object) -> None:
     json.dump(value, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
@@ -99,291 +122,31 @@ def parse_duration(raw: str) -> float:
     match = re.fullmatch(r"(\d+)([smhd])", raw.strip().lower())
     if not match:
         raise argparse.ArgumentTypeError("duration must look like 30s, 10m, 6h, or 2d")
-    amount = int(match.group(1))
     scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
-    return float(amount * scale)
+    return float(int(match.group(1)) * scale)
+
+
+def nonnegative(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be nonnegative")
+    return value
 
 
 def command_value(values: list[str]) -> list[str]:
     command = values[1:] if values[:1] == ["--"] else values
     if not command:
-        raise ValueError("a command is required after --")
+        raise ValueError("command required after --")
     return command
 
 
-def pid_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def is_cancelled(wait_id: str) -> bool:
-    with connect() as connection:
-        row = connection.execute("SELECT state FROM waits WHERE id = ?", (wait_id,)).fetchone()
-    return row is None or row["state"] == "cancelled"
-
-
-def update_wait(wait_id: str, fields: dict[str, Any], expected: set[str] | None = None) -> bool:
-    assignments = ", ".join(f"{name} = ?" for name in fields)
-    values = list(fields.values())
-    where = "id = ?"
-    values.append(wait_id)
-    if expected:
-        placeholders = ", ".join("?" for _ in expected)
-        where += f" AND state IN ({placeholders})"
-        values.extend(sorted(expected))
-    with connect() as connection:
-        cursor = connection.execute(f"UPDATE waits SET {assignments} WHERE {where}", values)
-        connection.commit()
-    return cursor.rowcount == 1
-
-
-def spawn_worker(wait_id: str, log_path: Path) -> int:
-    script = Path(__file__).resolve()
-    with log_path.open("ab", buffering=0) as log:
-        process = subprocess.Popen(
-            [sys.executable, str(script), "_worker", wait_id],
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            cwd=state_dir(),
-            start_new_session=True,
-            close_fds=True,
-        )
-    return process.pid
-
-
-def delivery_value(remote: str | None, remote_auth_token_env: str | None) -> dict[str, Any]:
-    if remote_auth_token_env and not remote:
-        raise ValueError("--remote-auth-token-env requires --remote")
-    if remote:
-        return {
-            "mode": "explicit_remote",
-            "endpoint": remote,
-            "auth_token_env": remote_auth_token_env,
-            "assumption": (
-                "Assuming the supplied endpoint is the app-server that owns this thread and "
-                "that registration is running in the primary agent; remote thread source cannot be preflighted."
-            ),
-        }
-    return {
-        "mode": "local_auto",
-        "assumption": (
-            "Assuming standalone Codex or the default local daemon shares this execution host and CODEX_HOME."
-        ),
-    }
-
-
-def preflight_registration(thread_id: str, delivery: dict[str, Any]) -> str:
-    if delivery["mode"] == "explicit_remote":
-        return delivery["assumption"]
-    client: AppServerClient | None = None
-    try:
-        client = AppServerClient()
-        result = client.call("thread/read", {"threadId": thread_id, "includeTurns": False})
-        thread = result["thread"]
-        source = thread.get("source")
-        if thread.get("ephemeral"):
-            raise RuntimeError("the current thread is ephemeral and cannot receive durable queued input")
-        if (
-            thread.get("parentThreadId")
-            or thread.get("threadSource") == "subagent"
-            or isinstance(source, dict) and "subAgent" in source
-        ):
-            raise RuntimeError("long waits may only be registered by the primary agent")
-    except RpcError as error:
-        raise RuntimeError(
-            f"local thread preflight failed ({error}); if this Codex uses an explicit app-server, pass --remote"
-        ) from error
-    finally:
-        if client is not None:
-            client.close()
-    return delivery["assumption"] + " Durable primary thread verified through local thread/read."
-
-
-def register(
-    kind: str,
-    spec: dict[str, Any],
-    message: str,
-    delivery: dict[str, Any],
-) -> dict[str, Any]:
-    thread_id = os.environ.get("CODEX_THREAD_ID")
-    if not thread_id:
-        raise RuntimeError("CODEX_THREAD_ID is unavailable; run registration from a Codex tool command")
-    assumption = preflight_registration(thread_id, delivery)
-    spec["delivery"] = delivery
-    wait_id = str(uuid.uuid4())
-    log_path = state_dir() / f"{wait_id}.log"
-    client_message_id = f"codex-long-wait:{wait_id}"
-    created_at = time.time()
-    with connect() as connection:
-        connection.execute(
-            """
-            INSERT INTO waits (
-                id, thread_id, kind, spec_json, message, client_message_id,
-                state, created_at, log_path
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-            """,
-            (
-                wait_id,
-                thread_id,
-                kind,
-                json.dumps(spec),
-                message,
-                client_message_id,
-                created_at,
-                str(log_path),
-            ),
-        )
-        connection.commit()
-    pid: int | None = None
-    state = "pending"
-    try:
-        if kind == "probe":
-            result = wait_probe()
-            update_wait(
-                wait_id,
-                {
-                    "state": "ready",
-                    "condition_at": time.time(),
-                    "result_json": json.dumps(result),
-                },
-                {"pending"},
-            )
-            deliver(wait_id, reconcile=False)
-            probe_row = get_wait(wait_id)
-            state = probe_row["state"]
-            if state != "delivered":
-                raise RuntimeError(
-                    f"probe {wait_id} was not accepted: {state}: {probe_row['error']}"
-                )
-        else:
-            pid = spawn_worker(wait_id, log_path)
-            update_wait(wait_id, {"pid": pid})
-    except Exception as error:
-        if kind != "probe":
-            update_wait(
-                wait_id,
-                {"state": "delivery_failed", "error": f"worker launch failed: {error}"},
-            )
-        raise
-    return {
-        "id": wait_id,
-        "thread_id": thread_id,
-        "state": state,
-        "pid": pid,
-        "log_path": str(log_path),
-        "delivery_assumption": assumption,
-    }
-
-
-def wait_after(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
-    deadline = spec["registered_at"] + spec["seconds"]
-    while time.time() < deadline:
-        if is_cancelled(wait_id):
-            raise InterruptedError("wait cancelled")
-        time.sleep(min(5, max(0, deadline - time.time())))
-    return {"ok": True, "kind": "after", "elapsed_seconds": spec["seconds"]}
-
-
-def wait_probe() -> dict[str, Any]:
-    return {"ok": True, "kind": "probe"}
-
-
-def wait_run(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
-    started = time.time()
-    process = subprocess.Popen(spec["command"])
-    while process.poll() is None:
-        if is_cancelled(wait_id):
-            process.terminate()
-            raise InterruptedError("wait cancelled")
-        time.sleep(1)
-    return {
-        "ok": process.returncode == 0,
-        "kind": "run",
-        "command": spec["command"],
-        "exit_code": process.returncode,
-        "elapsed_seconds": round(time.time() - started, 3),
-    }
-
-
-def wait_until(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
-    started = time.time()
-    attempts = 0
-    while True:
-        if is_cancelled(wait_id):
-            raise InterruptedError("wait cancelled")
-        attempts += 1
-        result = subprocess.run(spec["command"], check=False)
-        if result.returncode == 0:
-            return {"ok": True, "kind": "until", "attempts": attempts, "command": spec["command"]}
-        timeout = spec.get("timeout")
-        if timeout is not None and time.time() - started >= timeout:
-            return {
-                "ok": False,
-                "kind": "until",
-                "attempts": attempts,
-                "command": spec["command"],
-                "error": "predicate timeout",
-                "last_exit_code": result.returncode,
-            }
-        time.sleep(spec["interval"])
-
-
-def slurm_states(job_id: str) -> list[str]:
-    result = subprocess.run(
-        ["sacct", "-X", "-n", "-P", "-j", job_id, "-o", "State"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"sacct exited {result.returncode}: {result.stderr.strip()}")
-    return [line.split("|", 1)[0].strip().split("+", 1)[0] for line in result.stdout.splitlines() if line.strip()]
-
-
-def wait_slurm(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
-    started = time.time()
-    while True:
-        if is_cancelled(wait_id):
-            raise InterruptedError("wait cancelled")
-        states = slurm_states(spec["job_id"])
-        failures = sorted(set(states) & SLURM_FAILURE_STATES)
-        if failures:
-            return {"ok": False, "kind": "slurm", "job_id": spec["job_id"], "states": states}
-        if states and all(state == "COMPLETED" for state in states):
-            return {"ok": True, "kind": "slurm", "job_id": spec["job_id"], "states": states}
-        timeout = spec.get("timeout")
-        if timeout is not None and time.time() - started >= timeout:
-            return {"ok": False, "kind": "slurm", "job_id": spec["job_id"], "states": states, "error": "Slurm wait timeout"}
-        time.sleep(spec["interval"])
-
-
-def wait_for_condition(wait_id: str, kind: str, spec: dict[str, Any]) -> dict[str, Any]:
-    if kind == "probe":
-        return wait_probe()
-    if kind == "after":
-        return wait_after(wait_id, spec)
-    if kind == "run":
-        return wait_run(wait_id, spec)
-    if kind == "until":
-        return wait_until(wait_id, spec)
-    if kind == "slurm":
-        return wait_slurm(wait_id, spec)
-    raise RuntimeError(f"unknown wait kind: {kind}")
-
-
 class AppServerClient:
+    """Minimal local stdio client used only for registration preflight."""
+
     def __init__(self) -> None:
         codex = os.environ.get("CODEX_BIN") or shutil.which("codex")
         if not codex:
-            raise RuntimeError("codex executable not found; set CODEX_BIN for the detached worker")
+            raise RuntimeError("codex executable not found; set CODEX_BIN")
         self.process = subprocess.Popen(
             [codex, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
@@ -396,35 +159,35 @@ class AppServerClient:
         self.call(
             "initialize",
             {
-                "clientInfo": {"name": "long_wait", "title": "Long Wait", "version": "0.1.0"},
+                "clientInfo": {"name": "long_wait", "title": "Long Wait", "version": "0.2.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )
         self.send({"method": "initialized"})
 
-    def send(self, message: dict[str, Any]) -> None:
+    def send(self, message: JsonObject) -> None:
         if self.process.stdin is None:
-            raise RuntimeError("app-server stdin is unavailable")
+            raise RuntimeError("app-server stdin unavailable")
         self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
         self.process.stdin.flush()
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
+    def call(self, method: str, params: JsonObject) -> JsonObject:
         request_id = self.next_id
         self.next_id += 1
         self.send({"id": request_id, "method": method, "params": params})
         if self.process.stdout is None:
-            raise RuntimeError("app-server stdout is unavailable")
-        while True:
-            line = self.process.stdout.readline()
-            if not line:
-                raise RuntimeError(f"app-server closed while waiting for {method}")
-            message = json.loads(line)
-            if message.get("id") != request_id:
+            raise RuntimeError("app-server stdout unavailable")
+        while line := self.process.stdout.readline():
+            value = json.loads(line)
+            if not isinstance(value, dict) or value.get("id") != request_id:
                 continue
-            if "error" in message:
-                error = message["error"]
-                raise RpcError(f"{method}: {error.get('code')}: {error.get('message')}")
-            return message.get("result")
+            if "error" in value:
+                raise RpcError(f"{method}: {value['error']}")
+            result = value.get("result")
+            if not isinstance(result, dict):
+                raise RpcError(f"{method}: invalid response")
+            return cast(JsonObject, result)
+        raise RuntimeError(f"app-server closed during {method}")
 
     def close(self) -> None:
         if self.process.stdin:
@@ -436,213 +199,289 @@ class AppServerClient:
             self.process.wait(timeout=2)
 
 
-def contains_marker(value: Any, marker: str) -> bool:
-    if isinstance(value, dict):
-        return any(contains_marker(item, marker) for item in value.values())
-    if isinstance(value, list):
-        return any(contains_marker(item, marker) for item in value)
-    return isinstance(value, str) and marker in value
-
-
-def already_delivered(client: AppServerClient, thread_id: str, marker: str) -> bool:
-    cursor: str | None = None
-    while True:
-        result = client.call(
-            "thread/queue/list",
-            {"threadId": thread_id, "cursor": cursor, "limit": 100},
-        )
-        if contains_marker(result.get("data", []), marker):
-            return True
-        cursor = result.get("nextCursor")
-        if not cursor:
-            break
-    history = client.call("thread/read", {"threadId": thread_id, "includeTurns": True})
-    return contains_marker(history, marker)
-
-
-def continuation_text(row: sqlite3.Row) -> str:
-    result = json.loads(row["result_json"])
-    payload = {
-        "id": row["id"],
-        "message": row["message"],
-        "outcome": "success" if result.get("ok") is True else "failure",
-        "result": result,
+def delivery_value(remote: str | None, auth_env: str | None) -> JsonObject:
+    if auth_env and not remote:
+        raise ValueError("--remote-auth-token-env requires --remote")
+    if remote:
+        return {
+            "mode": "explicit_remote",
+            "endpoint": remote,
+            "auth_token_env": auth_env,
+            "assumption": "Supplied endpoint owns thread; caller is primary agent.",
+        }
+    return {
+        "mode": "local_auto",
+        "assumption": "Standalone Codex or default local daemon shares host and CODEX_HOME.",
     }
-    marker = "[long-wait-probe:v1]" if row["kind"] == "probe" else "[long-wait:v1]"
-    return marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-def queue_command(row: sqlite3.Row, delivery: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+def preflight(thread_id: str, delivery: JsonObject) -> str:
+    if delivery["mode"] == "explicit_remote":
+        return str(delivery["assumption"])
+    client: AppServerClient | None = None
+    try:
+        client = AppServerClient()
+        response = client.call("thread/read", {"threadId": thread_id, "includeTurns": False})
+        thread = response.get("thread")
+        if not isinstance(thread, dict):
+            raise RuntimeError("thread/read omitted thread")
+        source = thread.get("source")
+        if thread.get("ephemeral"):
+            raise RuntimeError("ephemeral thread cannot receive durable input")
+        if (
+            thread.get("parentThreadId")
+            or thread.get("threadSource") == "subagent"
+            or isinstance(source, dict) and "subAgent" in source
+        ):
+            raise RuntimeError("primary agent required")
+    except RpcError as error:
+        raise RuntimeError(f"local preflight failed ({error}); pass --remote when needed") from error
+    finally:
+        if client:
+            client.close()
+    return str(delivery["assumption"]) + " Durable primary thread verified."
+
+
+def queue_message(record: JsonObject) -> subprocess.CompletedProcess[str]:
     codex = os.environ.get("CODEX_BIN") or shutil.which("codex")
     if not codex:
-        raise RuntimeError("codex executable not found; set CODEX_BIN for the detached worker")
-    command = [
-        codex,
-        "queue",
-        "--thread",
-        row["thread_id"],
-        "--message",
-        continuation_text(row),
-    ]
+        raise RuntimeError("codex executable not found; set CODEX_BIN")
+    result = cast(JsonObject, record["result"])
+    payload: JsonObject = {
+        "id": record["id"],
+        "message": record["message"],
+        "status": result["status"],
+        "result": result,
+    }
+    marker = "[long-wait-probe:v1]" if record["kind"] == "probe" else "[long-wait:v1]"
+    message = marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    command = [codex, "queue", "--thread", str(record["thread_id"]), "--message", message]
+    delivery = cast(JsonObject, record["delivery"])
     if delivery["mode"] == "explicit_remote":
-        command.extend(["--remote", delivery["endpoint"]])
+        command.extend(["--remote", str(delivery["endpoint"])])
         if auth_env := delivery.get("auth_token_env"):
-            command.extend(["--remote-auth-token-env", auth_env])
+            command.extend(["--remote-auth-token-env", str(auth_env)])
     return subprocess.run(command, check=False, capture_output=True, text=True)
 
 
-def deliver(wait_id: str, reconcile: bool) -> None:
-    with connect() as connection:
-        row = connection.execute("SELECT * FROM waits WHERE id = ?", (wait_id,)).fetchone()
-    if row is None:
-        raise RuntimeError(f"unknown wait ID: {wait_id}")
-    delivery = json.loads(row["spec_json"])["delivery"]
-    if reconcile and delivery["mode"] == "explicit_remote":
-        raise RuntimeError(
-            "remote delivery cannot be reconciled safely; inspect the remote thread before registering a replacement"
-        )
-    expected = DELIVERY_RETRY_STATES | {"ready"}
-    if not update_wait(wait_id, {"state": "delivering", "error": None}, expected):
-        raise RuntimeError("wait is not ready for delivery")
-    client: AppServerClient | None = None
-    add_attempted = False
+def deliver(wait_id: str) -> None:
+    if update_record(wait_id, {"state": "delivering", "error": None}, {"ready"}) is None:
+        raise RuntimeError("wait not ready for delivery")
     try:
-        if reconcile:
-            client = AppServerClient()
-            if already_delivered(client, row["thread_id"], f'"id":"{wait_id}"'):
-                update_wait(wait_id, {"state": "delivered", "delivered_at": time.time()}, {"delivering"})
-                return
-        add_attempted = True
-        result = queue_command(row, delivery)
-        if result.returncode != 0:
+        result = queue_message(load_record(wait_id))
+        if result.returncode:
             detail = result.stderr.strip() or result.stdout.strip() or f"codex queue exited {result.returncode}"
-            update_wait(wait_id, {"state": "delivery_unknown", "error": detail}, {"delivering"})
+            update_record(wait_id, {"state": "delivery_unknown", "error": detail}, {"delivering"})
             return
-        update_wait(wait_id, {"state": "delivered", "delivered_at": time.time()}, {"delivering"})
+        update_record(wait_id, {"state": "delivered", "delivered_at": time.time()}, {"delivering"})
     except Exception as error:
-        state = "delivery_unknown" if add_attempted else "delivery_failed"
-        update_wait(wait_id, {"state": state, "error": str(error)}, {"delivering"})
-    finally:
-        if client is not None:
-            client.close()
+        update_record(wait_id, {"state": "delivery_unknown", "error": str(error)}, {"delivering"})
+
+
+def spawn_worker(wait_id: str, log_path: Path) -> int:
+    with log_path.open("ab", buffering=0) as log:
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "_worker", wait_id],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            cwd=state_dir(),
+            start_new_session=True,
+            close_fds=True,
+        )
+    return process.pid
+
+
+def register(kind: str, spec: JsonObject, message: str, delivery: JsonObject) -> JsonObject:
+    thread_id = os.environ.get("CODEX_THREAD_ID")
+    if not thread_id:
+        raise RuntimeError("CODEX_THREAD_ID unavailable; register from Codex tool command")
+    assumption = preflight(thread_id, delivery)
+    wait_id = str(uuid.uuid4())
+    log_path = state_dir() / f"{wait_id}.log"
+    record: JsonObject = {
+        "id": wait_id,
+        "thread_id": thread_id,
+        "kind": kind,
+        "spec": spec,
+        "message": message,
+        "delivery": delivery,
+        "delivery_assumption": assumption,
+        "state": "pending",
+        "pid": None,
+        "child_pid": None,
+        "created_at": time.time(),
+        "log_path": str(log_path),
+        "result": None,
+        "error": None,
+    }
+    create_record(record)
+    if kind == "probe":
+        update_record(wait_id, {"state": "ready", "result": {"kind": "probe", "status": 0}})
+        deliver(wait_id)
+        record = load_record(wait_id)
+        if record["state"] != "delivered":
+            raise RuntimeError(f"probe {wait_id} not accepted: {record['state']}: {record['error']}")
+    else:
+        try:
+            pid = spawn_worker(wait_id, log_path)
+            update_record(wait_id, {"pid": pid})
+        except Exception as error:
+            update_record(wait_id, {"state": "failed", "error": str(error)})
+            raise
+    return public_record(load_record(wait_id))
+
+
+def cancelled(wait_id: str) -> bool:
+    return load_record(wait_id)["state"] == "cancelled"
+
+
+def sleep_until(wait_id: str, deadline: float) -> bool:
+    while time.time() < deadline:
+        if cancelled(wait_id):
+            return False
+        time.sleep(min(1, max(0, deadline - time.time())))
+    return True
+
+
+def after_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
+    seconds = float(cast(float, spec["seconds"]))
+    deadline = float(cast(float, spec["registered_at"])) + seconds
+    if not sleep_until(wait_id, deadline):
+        return None
+    return {"kind": "after", "status": 0, "elapsed_seconds": seconds}
+
+
+def stop_process(process: subprocess.Popen[object]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+
+
+def timeout_result(started: float, attempt: int) -> JsonObject:
+    return {
+        "kind": "run",
+        "status": 124,
+        "reason": "timeout",
+        "attempts": attempt,
+        "elapsed_seconds": round(time.time() - started, 3),
+    }
+
+
+def run_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
+    command = cast(list[str], spec["command"])
+    timeout = cast(float | None, spec["timeout"])
+    max_retries = int(cast(int, spec["max_retries"]))
+    retry_delay = float(cast(float, spec["retry_delay"]))
+    started = time.time()
+    deadline = started + timeout if timeout is not None else None
+    for attempt in range(1, max_retries + 2):
+        if cancelled(wait_id):
+            return None
+        if deadline is not None and time.time() >= deadline:
+            return timeout_result(started, attempt)
+        process = subprocess.Popen(command, start_new_session=True)
+        update_record(wait_id, {"child_pid": process.pid})
+        while process.poll() is None:
+            if cancelled(wait_id):
+                stop_process(process)
+                return None
+            if deadline is not None and time.time() >= deadline:
+                stop_process(process)
+                update_record(wait_id, {"child_pid": None})
+                return timeout_result(started, attempt)
+            time.sleep(0.5)
+        update_record(wait_id, {"child_pid": None})
+        code = process.returncode
+        status = code if code >= 0 else 128 - code
+        if status == 0 or attempt > max_retries:
+            return {
+                "kind": "run",
+                "status": status,
+                "reason": "exited" if status == 0 else "retries_exhausted",
+                "attempts": attempt,
+                "elapsed_seconds": round(time.time() - started, 3),
+            }
+        retry_deadline = time.time() + retry_delay
+        if deadline is not None:
+            retry_deadline = min(retry_deadline, deadline)
+        if not sleep_until(wait_id, retry_deadline):
+            return None
+    raise AssertionError("unreachable")
 
 
 def worker(wait_id: str) -> int:
-    claimed = update_wait(
-        wait_id,
-        {"state": "waiting", "started_at": time.time(), "pid": os.getpid(), "error": None},
-        {"pending"},
-    )
-    if not claimed:
+    if update_record(wait_id, {"state": "waiting", "pid": os.getpid()}, {"pending"}) is None:
         return 0
-    with connect() as connection:
-        row = connection.execute("SELECT * FROM waits WHERE id = ?", (wait_id,)).fetchone()
-    if row is None:
-        return 1
+    record = load_record(wait_id)
     try:
-        result = wait_for_condition(wait_id, row["kind"], json.loads(row["spec_json"]))
-    except InterruptedError:
-        return 0
+        spec = cast(JsonObject, record["spec"])
+        result = after_result(wait_id, spec) if record["kind"] == "after" else run_result(wait_id, spec)
     except Exception as error:
-        result = {"ok": False, "kind": row["kind"], "error": str(error)}
-    if not update_wait(
-        wait_id,
-        {"state": "ready", "condition_at": time.time(), "result_json": json.dumps(result)},
-        {"waiting"},
-    ):
+        result = {"kind": record["kind"], "status": 125, "reason": "helper_error", "error": str(error)}
+    if result is None:
         return 0
-    deliver(wait_id, reconcile=False)
+    if update_record(wait_id, {"state": "ready", "result": result, "condition_at": time.time()}, {"waiting"}) is not None:
+        deliver(wait_id)
     return 0
 
 
-def get_wait(wait_id: str) -> sqlite3.Row:
-    with connect() as connection:
-        row = connection.execute("SELECT * FROM waits WHERE id = ?", (wait_id,)).fetchone()
-    if row is None:
-        raise ValueError(f"unknown wait ID: {wait_id}")
-    return row
+def kill_group(value: object) -> None:
+    if not isinstance(value, int) or value <= 0:
+        return
+    try:
+        os.killpg(value, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
-def cancel(wait_id: str) -> dict[str, Any]:
-    row = get_wait(wait_id)
-    if row["state"] in TERMINAL_STATES:
-        return row_dict(row)
-    update_wait(wait_id, {"state": "cancelled", "error": "cancelled by user"})
-    pid = row["pid"]
-    if pid_alive(pid):
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-    return row_dict(get_wait(wait_id))
-
-
-def retry_delivery(wait_id: str) -> dict[str, Any]:
-    row = get_wait(wait_id)
-    if row["state"] == "delivering" and pid_alive(row["pid"]):
-        raise RuntimeError("the original delivery worker is still running")
-    if row["state"] == "delivering":
-        update_wait(wait_id, {"state": "delivery_unknown"}, {"delivering"})
-    elif row["state"] not in DELIVERY_RETRY_STATES:
-        raise RuntimeError(f"delivery cannot be retried from state {row['state']}")
-    deliver(wait_id, reconcile=True)
-    return row_dict(get_wait(wait_id))
+def cancel(wait_id: str) -> JsonObject:
+    record = load_record(wait_id)
+    if record["state"] in TERMINAL_STATES:
+        return public_record(record)
+    updated = update_record(wait_id, {"state": "cancelled", "error": "cancelled"})
+    assert updated is not None
+    kill_group(record.get("child_pid"))
+    kill_group(record.get("pid"))
+    return public_record(load_record(wait_id))
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Wait independently, then continue the current Codex thread.")
-    subparsers = parser.add_subparsers(dest="action", required=True)
-    default_message = "The registered long wait has finished. Continue the prior task using the completion details below."
+    parser = argparse.ArgumentParser(description="Wait independently, then continue current Codex thread.")
+    actions = parser.add_subparsers(dest="action", required=True)
+    default_message = "Long wait reached a terminal result. Continue prior task using attached result."
 
-    def add_delivery_arguments(value: argparse.ArgumentParser) -> None:
-        value.add_argument(
-            "--remote",
-            help="owning app-server endpoint: ws://, wss://, unix://, or unix://PATH",
-        )
-        value.add_argument(
-            "--remote-auth-token-env",
-            help="environment variable containing the remote WebSocket bearer token",
-        )
+    def delivery_args(value: argparse.ArgumentParser) -> None:
+        value.add_argument("--remote", help="owning app-server ws://, wss://, or unix:// endpoint")
+        value.add_argument("--remote-auth-token-env", help="environment variable containing bearer token")
+        value.add_argument("--message", default=default_message, help="continuation note in wake envelope")
 
-    probe = subparsers.add_parser("probe", help="verify end-to-end delivery to this thread")
-    probe.add_argument(
-        "--message",
-        default="Long-wait delivery probe succeeded. Confirm the matching ID and perform no additional work.",
-    )
-    add_delivery_arguments(probe)
+    probe = actions.add_parser("probe", help="synchronously verify delivery route")
+    delivery_args(probe)
 
-    after = subparsers.add_parser("after", help="wake after an elapsed duration")
+    after = actions.add_parser("after", help="wake after duration")
     after.add_argument("duration", type=parse_duration)
-    after.add_argument("--message", default=default_message)
-    add_delivery_arguments(after)
+    delivery_args(after)
 
-    run = subparsers.add_parser("run", help="run a command and wake when it exits")
-    run.add_argument("--message", default=default_message)
-    add_delivery_arguments(run)
+    run = actions.add_parser("run", help="wake when command reaches terminal result")
+    run.add_argument("--timeout", type=parse_duration, help="overall timeout across attempts")
+    run.add_argument("--max-retries", type=nonnegative, default=0)
+    run.add_argument("--retry-delay", type=parse_duration, default=30.0)
+    delivery_args(run)
     run.add_argument("command", nargs=argparse.REMAINDER)
 
-    until = subparsers.add_parser("until", help="wake when a predicate command exits zero")
-    until.add_argument("--interval", type=float, default=30)
-    until.add_argument("--timeout", type=parse_duration)
-    until.add_argument("--message", default=default_message)
-    add_delivery_arguments(until)
-    until.add_argument("command", nargs=argparse.REMAINDER)
-
-    slurm = subparsers.add_parser("slurm", help="wake when a Slurm job reaches a terminal state")
-    slurm.add_argument("job_id")
-    slurm.add_argument("--interval", type=float, default=30)
-    slurm.add_argument("--timeout", type=parse_duration)
-    slurm.add_argument("--message", default=default_message)
-    add_delivery_arguments(slurm)
-
-    subparsers.add_parser("list", help="list registered waits")
-    status = subparsers.add_parser("status", help="show one registered wait")
+    actions.add_parser("list", help="list waits")
+    status = actions.add_parser("status", help="show wait")
     status.add_argument("wait_id")
-    cancel_parser = subparsers.add_parser("cancel", help="cancel a registered wait")
+    cancel_parser = actions.add_parser("cancel", help="cancel wait")
     cancel_parser.add_argument("wait_id")
-    retry = subparsers.add_parser("retry-delivery", help="reconcile and retry an ambiguous delivery")
-    retry.add_argument("wait_id")
-    worker_parser = subparsers.add_parser("_worker", help=argparse.SUPPRESS)
+    worker_parser = actions.add_parser("_worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("wait_id")
     return parser
 
@@ -652,26 +491,28 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        delivery = lambda: delivery_value(args.remote, args.remote_auth_token_env)
         if args.action == "probe":
-            emit(register("probe", {}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
+            emit(register("probe", {}, args.message, delivery()))
         elif args.action == "after":
-            emit(register("after", {"seconds": args.duration, "registered_at": time.time()}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
+            spec: JsonObject = {"seconds": args.duration, "registered_at": time.time()}
+            emit(register("after", spec, args.message, delivery()))
         elif args.action == "run":
-            emit(register("run", {"command": command_value(args.command)}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
-        elif args.action == "until":
-            emit(register("until", {"command": command_value(args.command), "interval": args.interval, "timeout": args.timeout}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
-        elif args.action == "slurm":
-            emit(register("slurm", {"job_id": args.job_id, "interval": args.interval, "timeout": args.timeout}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
+            spec = {
+                "command": command_value(args.command),
+                "timeout": args.timeout,
+                "max_retries": args.max_retries,
+                "retry_delay": args.retry_delay,
+            }
+            emit(register("run", spec, args.message, delivery()))
         elif args.action == "list":
-            with connect() as connection:
-                rows = connection.execute("SELECT * FROM waits ORDER BY created_at DESC").fetchall()
-            emit([row_dict(row) for row in rows])
+            records = [load_record(path.stem) for path in state_dir().glob("*.json")]
+            records.sort(key=lambda item: float(cast(float, item["created_at"])), reverse=True)
+            emit([public_record(record) for record in records])
         elif args.action == "status":
-            emit(row_dict(get_wait(args.wait_id)))
+            emit(public_record(load_record(args.wait_id)))
         elif args.action == "cancel":
             emit(cancel(args.wait_id))
-        elif args.action == "retry-delivery":
-            emit(retry_delivery(args.wait_id))
         elif args.action == "_worker":
             return worker(args.wait_id)
         return 0
@@ -682,3 +523,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
