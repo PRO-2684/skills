@@ -15,129 +15,324 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, cast
+from typing import Dict, Iterator, List, Mapping, Optional, Union
 
 
-JsonObject = Dict[str, object]
-TERMINAL_STATES = {"delivered", "cancelled"}
+class WaitKind(str, Enum):
+    PROBE = "probe"
+    AFTER = "after"
+    RUN = "run"
+
+
+class WaitState(str, Enum):
+    PENDING = "pending"
+    WAITING = "waiting"
+    READY = "ready"
+    DELIVERING = "delivering"
+    DELIVERED = "delivered"
+    DELIVERY_UNKNOWN = "delivery_unknown"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class DeliveryMode(str, Enum):
+    LOCAL_AUTO = "local_auto"
+    EXPLICIT_REMOTE = "explicit_remote"
+
+
+def as_mapping(value: object, name: str) -> Dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{name} must be an object with string keys")
+    return {str(key): item for key, item in value.items()}
+
+
+def required_str(data: Mapping[str, object], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    return value
+
+
+def required_int(data: Mapping[str, object], key: str) -> int:
+    value = data.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{key} must be an integer")
+    return value
+
+
+def required_float(data: Mapping[str, object], key: str) -> float:
+    value = data.get(key)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{key} must be a number")
+    return float(value)
+
+
+def optional_str(data: Mapping[str, object], key: str) -> Optional[str]:
+    value = data.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{key} must be a string or null")
+    return value
+
+
+def optional_int(data: Mapping[str, object], key: str) -> Optional[int]:
+    value = data.get(key)
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+        raise ValueError(f"{key} must be an integer or null")
+    return value
+
+
+def optional_float(data: Mapping[str, object], key: str) -> Optional[float]:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{key} must be a number or null")
+    return float(value)
+
+
+@dataclass(frozen=True)
+class Delivery:
+    mode: DeliveryMode
+    assumption: str
+    endpoint: Optional[str] = None
+    auth_token_env: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "mode": self.mode.value,
+            "assumption": self.assumption,
+            "endpoint": self.endpoint,
+            "auth_token_env": self.auth_token_env,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> Delivery:
+        return cls(
+            mode=DeliveryMode(required_str(data, "mode")),
+            assumption=required_str(data, "assumption"),
+            endpoint=optional_str(data, "endpoint"),
+            auth_token_env=optional_str(data, "auth_token_env"),
+        )
+
+
+@dataclass(frozen=True)
+class AfterSpec:
+    seconds: float
+    registered_at: float
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"seconds": self.seconds, "registered_at": self.registered_at}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> AfterSpec:
+        return cls(
+            seconds=required_float(data, "seconds"),
+            registered_at=required_float(data, "registered_at"),
+        )
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    command: List[str]
+    timeout: Optional[float]
+    max_retries: int
+    retry_delay: float
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "command": self.command,
+            "timeout": self.timeout,
+            "max_retries": self.max_retries,
+            "retry_delay": self.retry_delay,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> RunSpec:
+        command = data.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+            raise ValueError("command must be a nonempty string array")
+        return cls(
+            command=list(command),
+            timeout=optional_float(data, "timeout"),
+            max_retries=required_int(data, "max_retries"),
+            retry_delay=required_float(data, "retry_delay"),
+        )
+
+
+WaitSpec = Union[None, AfterSpec, RunSpec]
+
+
+@dataclass(frozen=True)
+class WaitResult:
+    kind: WaitKind
+    status: int
+    reason: Optional[str] = None
+    attempts: Optional[int] = None
+    elapsed_seconds: Optional[float] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        value: Dict[str, object] = {"kind": self.kind.value, "status": self.status}
+        for key, item in (
+            ("reason", self.reason),
+            ("attempts", self.attempts),
+            ("elapsed_seconds", self.elapsed_seconds),
+            ("error", self.error),
+        ):
+            if item is not None:
+                value[key] = item
+        return value
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> WaitResult:
+        return cls(
+            kind=WaitKind(required_str(data, "kind")),
+            status=required_int(data, "status"),
+            reason=optional_str(data, "reason"),
+            attempts=optional_int(data, "attempts"),
+            elapsed_seconds=optional_float(data, "elapsed_seconds"),
+            error=optional_str(data, "error"),
+        )
+
+
+@dataclass
+class WaitRecord:
+    id: str
+    thread_id: str
+    kind: WaitKind
+    spec: WaitSpec
+    message: str
+    delivery: Delivery
+    state: WaitState
+    created_at: float
+    log_path: str
+    pid: Optional[int] = None
+    child_pid: Optional[int] = None
+    result: Optional[WaitResult] = None
+    error: Optional[str] = None
+    condition_at: Optional[float] = None
+    delivered_at: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        if isinstance(self.spec, (AfterSpec, RunSpec)):
+            spec: object = self.spec.to_dict()
+        else:
+            spec = None
+        return {
+            "id": self.id,
+            "thread_id": self.thread_id,
+            "kind": self.kind.value,
+            "spec": spec,
+            "message": self.message,
+            "delivery": self.delivery.to_dict(),
+            "state": self.state.value,
+            "pid": self.pid,
+            "child_pid": self.child_pid,
+            "created_at": self.created_at,
+            "condition_at": self.condition_at,
+            "delivered_at": self.delivered_at,
+            "log_path": self.log_path,
+            "result": self.result.to_dict() if self.result else None,
+            "error": self.error,
+        }
+
+    def public_dict(self) -> Dict[str, object]:
+        value = self.to_dict()
+        value["delivery_assumption"] = self.delivery.assumption
+        value["worker_alive"] = process_alive(self.pid)
+        return value
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> WaitRecord:
+        kind = WaitKind(required_str(data, "kind"))
+        raw_spec = data.get("spec")
+        if kind == WaitKind.PROBE:
+            spec: WaitSpec = None
+        elif kind == WaitKind.AFTER:
+            spec = AfterSpec.from_dict(as_mapping(raw_spec, "spec"))
+        else:
+            spec = RunSpec.from_dict(as_mapping(raw_spec, "spec"))
+        raw_result = data.get("result")
+        result = None if raw_result is None else WaitResult.from_dict(as_mapping(raw_result, "result"))
+        return cls(
+            id=required_str(data, "id"),
+            thread_id=required_str(data, "thread_id"),
+            kind=kind,
+            spec=spec,
+            message=required_str(data, "message"),
+            delivery=Delivery.from_dict(as_mapping(data.get("delivery"), "delivery")),
+            state=WaitState(required_str(data, "state")),
+            pid=optional_int(data, "pid"),
+            child_pid=optional_int(data, "child_pid"),
+            created_at=required_float(data, "created_at"),
+            condition_at=optional_float(data, "condition_at"),
+            delivered_at=optional_float(data, "delivered_at"),
+            log_path=required_str(data, "log_path"),
+            result=result,
+            error=optional_str(data, "error"),
+        )
+
+
+class WaitStore:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    @staticmethod
+    def _checked_id(wait_id: str) -> str:
+        return str(uuid.UUID(wait_id))
+
+    def _record_path(self, wait_id: str) -> Path:
+        return self.root / f"{self._checked_id(wait_id)}.json"
+
+    @contextmanager
+    def _lock(self, wait_id: str) -> Iterator[None]:
+        path = self.root / f"{self._checked_id(wait_id)}.lock"
+        with path.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+
+    def _load_unlocked(self, wait_id: str) -> WaitRecord:
+        path = self._record_path(wait_id)
+        if not path.exists():
+            raise ValueError(f"unknown wait ID: {wait_id}")
+        raw: object = json.loads(path.read_text())
+        return WaitRecord.from_dict(as_mapping(raw, "wait record"))
+
+    def _save_unlocked(self, record: WaitRecord) -> None:
+        path = self._record_path(record.id)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(record.to_dict(), indent=2, sort_keys=True) + "\n")
+        os.replace(temporary, path)
+
+    def create(self, record: WaitRecord) -> None:
+        with self._lock(record.id):
+            if self._record_path(record.id).exists():
+                raise RuntimeError(f"wait already exists: {record.id}")
+            self._save_unlocked(record)
+
+    def load(self, wait_id: str) -> WaitRecord:
+        with self._lock(wait_id):
+            return self._load_unlocked(wait_id)
+
+    @contextmanager
+    def edit(self, wait_id: str) -> Iterator[WaitRecord]:
+        with self._lock(wait_id):
+            record = self._load_unlocked(wait_id)
+            yield record
+            self._save_unlocked(record)
+
+    def list(self) -> List[WaitRecord]:
+        records = [self.load(path.stem) for path in self.root.glob("*.json")]
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records
 
 
 class RpcError(RuntimeError):
     pass
-
-
-def state_dir() -> Path:
-    codex_home = os.environ.get("CODEX_HOME")
-    root = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
-    path = root / "long-waits"
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    return path
-
-
-def checked_id(wait_id: str) -> str:
-    return str(uuid.UUID(wait_id))
-
-
-def record_path(wait_id: str) -> Path:
-    return state_dir() / f"{checked_id(wait_id)}.json"
-
-
-@contextmanager
-def record_lock(wait_id: str) -> Iterator[None]:
-    path = state_dir() / f"{checked_id(wait_id)}.lock"
-    with path.open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
-
-
-def load_unlocked(wait_id: str) -> JsonObject:
-    path = record_path(wait_id)
-    if not path.exists():
-        raise ValueError(f"unknown wait ID: {wait_id}")
-    value = json.loads(path.read_text())
-    if not isinstance(value, dict):
-        raise ValueError(f"invalid wait record: {wait_id}")
-    return cast(JsonObject, value)
-
-
-def load_record(wait_id: str) -> JsonObject:
-    with record_lock(wait_id):
-        return load_unlocked(wait_id)
-
-
-def save_unlocked(record: JsonObject) -> None:
-    path = record_path(str(record["id"]))
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    os.replace(temporary, path)
-
-
-def create_record(record: JsonObject) -> None:
-    wait_id = str(record["id"])
-    with record_lock(wait_id):
-        if record_path(wait_id).exists():
-            raise RuntimeError(f"wait already exists: {wait_id}")
-        save_unlocked(record)
-
-
-def update_record(
-    wait_id: str,
-    fields: JsonObject,
-    expected: set[str] | None = None,
-) -> JsonObject | None:
-    with record_lock(wait_id):
-        record = load_unlocked(wait_id)
-        if expected and record.get("state") not in expected:
-            return None
-        record.update(fields)
-        save_unlocked(record)
-        return record
-
-
-def pid_alive(value: object) -> bool:
-    if not isinstance(value, int) or value <= 0:
-        return False
-    try:
-        os.kill(value, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def public_record(record: JsonObject) -> JsonObject:
-    value = dict(record)
-    value["worker_alive"] = pid_alive(record.get("pid"))
-    return value
-
-
-def emit(value: object) -> None:
-    json.dump(value, sys.stdout, indent=2, sort_keys=True)
-    sys.stdout.write("\n")
-
-
-def parse_duration(raw: str) -> float:
-    match = re.fullmatch(r"(\d+)([smhd])", raw.strip().lower())
-    if not match:
-        raise argparse.ArgumentTypeError("duration must look like 30s, 10m, 6h, or 2d")
-    scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
-    return float(int(match.group(1)) * scale)
-
-
-def nonnegative(raw: str) -> int:
-    value = int(raw)
-    if value < 0:
-        raise argparse.ArgumentTypeError("value must be nonnegative")
-    return value
-
-
-def command_value(values: list[str]) -> list[str]:
-    command = values[1:] if values[:1] == ["--"] else values
-    if not command:
-        raise ValueError("command required after --")
-    return command
 
 
 class AppServerClient:
@@ -159,34 +354,32 @@ class AppServerClient:
         self.call(
             "initialize",
             {
-                "clientInfo": {"name": "long_wait", "title": "Long Wait", "version": "0.2.0"},
+                "clientInfo": {"name": "long_wait", "title": "Long Wait", "version": "0.3.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )
         self.send({"method": "initialized"})
 
-    def send(self, message: JsonObject) -> None:
+    def send(self, message: Mapping[str, object]) -> None:
         if self.process.stdin is None:
             raise RuntimeError("app-server stdin unavailable")
         self.process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
         self.process.stdin.flush()
 
-    def call(self, method: str, params: JsonObject) -> JsonObject:
+    def call(self, method: str, params: Mapping[str, object]) -> Dict[str, object]:
         request_id = self.next_id
         self.next_id += 1
-        self.send({"id": request_id, "method": method, "params": params})
+        self.send({"id": request_id, "method": method, "params": dict(params)})
         if self.process.stdout is None:
             raise RuntimeError("app-server stdout unavailable")
         while line := self.process.stdout.readline():
-            value = json.loads(line)
-            if not isinstance(value, dict) or value.get("id") != request_id:
+            raw: object = json.loads(line)
+            response = as_mapping(raw, "app-server response")
+            if response.get("id") != request_id:
                 continue
-            if "error" in value:
-                raise RpcError(f"{method}: {value['error']}")
-            result = value.get("result")
-            if not isinstance(result, dict):
-                raise RpcError(f"{method}: invalid response")
-            return cast(JsonObject, result)
+            if "error" in response:
+                raise RpcError(f"{method}: {response['error']}")
+            return as_mapping(response.get("result"), f"{method} result")
         raise RuntimeError(f"app-server closed during {method}")
 
     def close(self) -> None:
@@ -199,33 +392,69 @@ class AppServerClient:
             self.process.wait(timeout=2)
 
 
-def delivery_value(remote: str | None, auth_env: str | None) -> JsonObject:
+def codex_home() -> Path:
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
+def process_alive(pid: Optional[int]) -> bool:
+    if pid is None or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def parse_duration(raw: str) -> float:
+    match = re.fullmatch(r"(\d+)([smhd])", raw.strip().lower())
+    if not match:
+        raise argparse.ArgumentTypeError("duration must look like 30s, 10m, 6h, or 2d")
+    scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+    return float(int(match.group(1)) * scale)
+
+
+def nonnegative(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be nonnegative")
+    return value
+
+
+def command_value(values: List[str]) -> List[str]:
+    command = values[1:] if values[:1] == ["--"] else values
+    if not command:
+        raise ValueError("command required after --")
+    return command
+
+
+def selected_delivery(remote: Optional[str], auth_env: Optional[str]) -> Delivery:
     if auth_env and not remote:
         raise ValueError("--remote-auth-token-env requires --remote")
     if remote:
-        return {
-            "mode": "explicit_remote",
-            "endpoint": remote,
-            "auth_token_env": auth_env,
-            "assumption": "Supplied endpoint owns thread; caller is primary agent.",
-        }
-    return {
-        "mode": "local_auto",
-        "assumption": "Standalone Codex or default local daemon shares host and CODEX_HOME.",
-    }
+        return Delivery(
+            mode=DeliveryMode.EXPLICIT_REMOTE,
+            endpoint=remote,
+            auth_token_env=auth_env,
+            assumption="Supplied endpoint owns thread; caller is primary agent.",
+        )
+    return Delivery(
+        mode=DeliveryMode.LOCAL_AUTO,
+        assumption="Standalone Codex or default local daemon shares host and CODEX_HOME.",
+    )
 
 
-def preflight(thread_id: str, delivery: JsonObject) -> str:
-    if delivery["mode"] == "explicit_remote":
-        return str(delivery["assumption"])
-    client: AppServerClient | None = None
+def preflight(thread_id: str, delivery: Delivery) -> str:
+    if delivery.mode == DeliveryMode.EXPLICIT_REMOTE:
+        return delivery.assumption
+    client: Optional[AppServerClient] = None
     try:
         client = AppServerClient()
         response = client.call("thread/read", {"threadId": thread_id, "includeTurns": False})
-        thread = response.get("thread")
-        if not isinstance(thread, dict):
-            raise RuntimeError("thread/read omitted thread")
-        thread = cast(JsonObject, thread)
+        thread = as_mapping(response.get("thread"), "thread")
         source = thread.get("source")
         if thread.get("ephemeral"):
             raise RuntimeError("ephemeral thread cannot receive durable input")
@@ -240,43 +469,55 @@ def preflight(thread_id: str, delivery: JsonObject) -> str:
     finally:
         if client:
             client.close()
-    return str(delivery["assumption"]) + " Durable primary thread verified."
+    return delivery.assumption + " Durable primary thread verified."
 
 
-def queue_message(record: JsonObject) -> subprocess.CompletedProcess[str]:
+def queue_message(record: WaitRecord) -> subprocess.CompletedProcess[str]:
     codex = os.environ.get("CODEX_BIN") or shutil.which("codex")
     if not codex:
         raise RuntimeError("codex executable not found; set CODEX_BIN")
-    result = cast(JsonObject, record["result"])
-    payload: JsonObject = {
-        "id": record["id"],
-        "message": record["message"],
-        "status": result["status"],
-        "result": result,
+    if record.result is None:
+        raise RuntimeError("wait result missing")
+    payload = {
+        "id": record.id,
+        "message": record.message,
+        "status": record.result.status,
+        "result": record.result.to_dict(),
     }
-    marker = "[long-wait-probe:v1]" if record["kind"] == "probe" else "[long-wait:v1]"
+    marker = "[long-wait-probe:v1]" if record.kind == WaitKind.PROBE else "[long-wait:v1]"
     message = marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    command = [codex, "queue", "--thread", str(record["thread_id"]), "--message", message]
-    delivery = cast(JsonObject, record["delivery"])
-    if delivery["mode"] == "explicit_remote":
-        command.extend(["--remote", str(delivery["endpoint"])])
-        if auth_env := delivery.get("auth_token_env"):
-            command.extend(["--remote-auth-token-env", str(auth_env)])
+    command = [codex, "queue", "--thread", record.thread_id, "--message", message]
+    if record.delivery.mode == DeliveryMode.EXPLICIT_REMOTE:
+        if record.delivery.endpoint is None:
+            raise RuntimeError("remote endpoint missing")
+        command.extend(["--remote", record.delivery.endpoint])
+        if record.delivery.auth_token_env:
+            command.extend(["--remote-auth-token-env", record.delivery.auth_token_env])
     return subprocess.run(command, check=False, capture_output=True, text=True)
 
 
-def deliver(wait_id: str) -> None:
-    if update_record(wait_id, {"state": "delivering", "error": None}, {"ready"}) is None:
-        raise RuntimeError("wait not ready for delivery")
+def deliver(store: WaitStore, wait_id: str) -> None:
+    with store.edit(wait_id) as record:
+        if record.state != WaitState.READY:
+            raise RuntimeError("wait not ready for delivery")
+        record.state = WaitState.DELIVERING
+        record.error = None
     try:
-        result = queue_message(load_record(wait_id))
-        if result.returncode:
-            detail = result.stderr.strip() or result.stdout.strip() or f"codex queue exited {result.returncode}"
-            update_record(wait_id, {"state": "delivery_unknown", "error": detail}, {"delivering"})
-            return
-        update_record(wait_id, {"state": "delivered", "delivered_at": time.time()}, {"delivering"})
+        result = queue_message(store.load(wait_id))
+        with store.edit(wait_id) as record:
+            if record.state != WaitState.DELIVERING:
+                return
+            if result.returncode:
+                record.state = WaitState.DELIVERY_UNKNOWN
+                record.error = result.stderr.strip() or result.stdout.strip() or f"codex queue exited {result.returncode}"
+            else:
+                record.state = WaitState.DELIVERED
+                record.delivered_at = time.time()
     except Exception as error:
-        update_record(wait_id, {"state": "delivery_unknown", "error": str(error)}, {"delivering"})
+        with store.edit(wait_id) as record:
+            if record.state == WaitState.DELIVERING:
+                record.state = WaitState.DELIVERY_UNKNOWN
+                record.error = str(error)
 
 
 def spawn_worker(wait_id: str, log_path: Path) -> int:
@@ -286,71 +527,80 @@ def spawn_worker(wait_id: str, log_path: Path) -> int:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            cwd=state_dir(),
+            cwd=codex_home() / "long-waits",
             start_new_session=True,
             close_fds=True,
         )
     return process.pid
 
 
-def register(kind: str, spec: JsonObject, message: str, delivery: JsonObject) -> JsonObject:
+def register(
+    store: WaitStore,
+    kind: WaitKind,
+    spec: WaitSpec,
+    message: str,
+    delivery: Delivery,
+) -> WaitRecord:
     thread_id = os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
         raise RuntimeError("CODEX_THREAD_ID unavailable; register from Codex tool command")
     assumption = preflight(thread_id, delivery)
+    delivery = Delivery(
+        mode=delivery.mode,
+        assumption=assumption,
+        endpoint=delivery.endpoint,
+        auth_token_env=delivery.auth_token_env,
+    )
     wait_id = str(uuid.uuid4())
-    log_path = state_dir() / f"{wait_id}.log"
-    record: JsonObject = {
-        "id": wait_id,
-        "thread_id": thread_id,
-        "kind": kind,
-        "spec": spec,
-        "message": message,
-        "delivery": delivery,
-        "delivery_assumption": assumption,
-        "state": "pending",
-        "pid": None,
-        "child_pid": None,
-        "created_at": time.time(),
-        "log_path": str(log_path),
-        "result": None,
-        "error": None,
-    }
-    create_record(record)
-    if kind == "probe":
-        update_record(wait_id, {"state": "ready", "result": {"kind": "probe", "status": 0}})
-        deliver(wait_id)
-        record = load_record(wait_id)
-        if record["state"] != "delivered":
-            raise RuntimeError(f"probe {wait_id} not accepted: {record['state']}: {record['error']}")
+    record = WaitRecord(
+        id=wait_id,
+        thread_id=thread_id,
+        kind=kind,
+        spec=spec,
+        message=message,
+        delivery=delivery,
+        state=WaitState.PENDING,
+        created_at=time.time(),
+        log_path=str(store.root / f"{wait_id}.log"),
+    )
+    store.create(record)
+    if kind == WaitKind.PROBE:
+        with store.edit(wait_id) as editable:
+            editable.state = WaitState.READY
+            editable.result = WaitResult(kind=WaitKind.PROBE, status=0)
+        deliver(store, wait_id)
+        record = store.load(wait_id)
+        if record.state != WaitState.DELIVERED:
+            raise RuntimeError(f"probe {wait_id} not accepted: {record.state.value}: {record.error}")
     else:
         try:
-            pid = spawn_worker(wait_id, log_path)
-            update_record(wait_id, {"pid": pid})
+            pid = spawn_worker(wait_id, Path(record.log_path))
+            with store.edit(wait_id) as editable:
+                editable.pid = pid
         except Exception as error:
-            update_record(wait_id, {"state": "failed", "error": str(error)})
+            with store.edit(wait_id) as editable:
+                editable.state = WaitState.FAILED
+                editable.error = str(error)
             raise
-    return public_record(load_record(wait_id))
+    return store.load(wait_id)
 
 
-def cancelled(wait_id: str) -> bool:
-    return load_record(wait_id)["state"] == "cancelled"
+def cancelled(store: WaitStore, wait_id: str) -> bool:
+    return store.load(wait_id).state == WaitState.CANCELLED
 
 
-def sleep_until(wait_id: str, deadline: float) -> bool:
+def sleep_until(store: WaitStore, wait_id: str, deadline: float) -> bool:
     while time.time() < deadline:
-        if cancelled(wait_id):
+        if cancelled(store, wait_id):
             return False
         time.sleep(min(1, max(0, deadline - time.time())))
     return True
 
 
-def after_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
-    seconds = float(cast(float, spec["seconds"]))
-    deadline = float(cast(float, spec["registered_at"])) + seconds
-    if not sleep_until(wait_id, deadline):
+def after_result(store: WaitStore, wait_id: str, spec: AfterSpec) -> Optional[WaitResult]:
+    if not sleep_until(store, wait_id, spec.registered_at + spec.seconds):
         return None
-    return {"kind": "after", "status": 0, "elapsed_seconds": seconds}
+    return WaitResult(kind=WaitKind.AFTER, status=0, elapsed_seconds=spec.seconds)
 
 
 def stop_process(process: subprocess.Popen[bytes]) -> None:
@@ -365,92 +615,110 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def timeout_result(started: float, attempt: int) -> JsonObject:
-    return {
-        "kind": "run",
-        "status": 124,
-        "reason": "timeout",
-        "attempts": attempt,
-        "elapsed_seconds": round(time.time() - started, 3),
-    }
+def timeout_result(started: float, attempt: int) -> WaitResult:
+    return WaitResult(
+        kind=WaitKind.RUN,
+        status=124,
+        reason="timeout",
+        attempts=attempt,
+        elapsed_seconds=round(time.time() - started, 3),
+    )
 
 
-def run_result(wait_id: str, spec: JsonObject) -> JsonObject | None:
-    command = cast(List[str], spec["command"])
-    timeout = cast(Optional[float], spec["timeout"])
-    max_retries = int(cast(int, spec["max_retries"]))
-    retry_delay = float(cast(float, spec["retry_delay"]))
+def run_result(store: WaitStore, wait_id: str, spec: RunSpec) -> Optional[WaitResult]:
     started = time.time()
-    deadline = started + timeout if timeout is not None else None
-    for attempt in range(1, max_retries + 2):
-        if cancelled(wait_id):
+    deadline = started + spec.timeout if spec.timeout is not None else None
+    for attempt in range(1, spec.max_retries + 2):
+        if cancelled(store, wait_id):
             return None
         if deadline is not None and time.time() >= deadline:
             return timeout_result(started, attempt)
-        process = subprocess.Popen(command, start_new_session=True)
-        update_record(wait_id, {"child_pid": process.pid})
+        process = subprocess.Popen(spec.command, start_new_session=True)
+        with store.edit(wait_id) as record:
+            record.child_pid = process.pid
         while process.poll() is None:
-            if cancelled(wait_id):
+            if cancelled(store, wait_id):
                 stop_process(process)
                 return None
             if deadline is not None and time.time() >= deadline:
                 stop_process(process)
-                update_record(wait_id, {"child_pid": None})
+                with store.edit(wait_id) as record:
+                    record.child_pid = None
                 return timeout_result(started, attempt)
             time.sleep(0.5)
-        update_record(wait_id, {"child_pid": None})
+        with store.edit(wait_id) as record:
+            record.child_pid = None
         code = process.returncode
         status = code if code >= 0 else 128 - code
-        if status == 0 or attempt > max_retries:
-            return {
-                "kind": "run",
-                "status": status,
-                "reason": "exited" if status == 0 else "retries_exhausted",
-                "attempts": attempt,
-                "elapsed_seconds": round(time.time() - started, 3),
-            }
-        retry_deadline = time.time() + retry_delay
+        if status == 0 or attempt > spec.max_retries:
+            return WaitResult(
+                kind=WaitKind.RUN,
+                status=status,
+                reason="exited" if status == 0 else "retries_exhausted",
+                attempts=attempt,
+                elapsed_seconds=round(time.time() - started, 3),
+            )
+        retry_deadline = time.time() + spec.retry_delay
         if deadline is not None:
             retry_deadline = min(retry_deadline, deadline)
-        if not sleep_until(wait_id, retry_deadline):
+        if not sleep_until(store, wait_id, retry_deadline):
             return None
     raise AssertionError("unreachable")
 
 
-def worker(wait_id: str) -> int:
-    if update_record(wait_id, {"state": "waiting", "pid": os.getpid()}, {"pending"}) is None:
-        return 0
-    record = load_record(wait_id)
+def worker(store: WaitStore, wait_id: str) -> int:
+    with store.edit(wait_id) as record:
+        if record.state != WaitState.PENDING:
+            return 0
+        record.state = WaitState.WAITING
+        record.pid = os.getpid()
+    record = store.load(wait_id)
     try:
-        spec = cast(JsonObject, record["spec"])
-        result = after_result(wait_id, spec) if record["kind"] == "after" else run_result(wait_id, spec)
+        if isinstance(record.spec, AfterSpec):
+            result = after_result(store, wait_id, record.spec)
+        elif isinstance(record.spec, RunSpec):
+            result = run_result(store, wait_id, record.spec)
+        else:
+            raise RuntimeError("worker wait spec missing")
     except Exception as error:
-        result = {"kind": record["kind"], "status": 125, "reason": "helper_error", "error": str(error)}
+        result = WaitResult(
+            kind=record.kind,
+            status=125,
+            reason="helper_error",
+            error=str(error),
+        )
     if result is None:
         return 0
-    if update_record(wait_id, {"state": "ready", "result": result, "condition_at": time.time()}, {"waiting"}) is not None:
-        deliver(wait_id)
+    with store.edit(wait_id) as editable:
+        if editable.state != WaitState.WAITING:
+            return 0
+        editable.state = WaitState.READY
+        editable.result = result
+        editable.condition_at = time.time()
+    deliver(store, wait_id)
     return 0
 
 
-def kill_group(value: object) -> None:
-    if not isinstance(value, int) or value <= 0:
+def kill_group(pid: Optional[int]) -> None:
+    if pid is None or pid <= 0:
         return
     try:
-        os.killpg(value, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
 
 
-def cancel(wait_id: str) -> JsonObject:
-    record = load_record(wait_id)
-    if record["state"] in TERMINAL_STATES:
-        return public_record(record)
-    updated = update_record(wait_id, {"state": "cancelled", "error": "cancelled"})
-    assert updated is not None
-    kill_group(record.get("child_pid"))
-    kill_group(record.get("pid"))
-    return public_record(load_record(wait_id))
+def cancel(store: WaitStore, wait_id: str) -> WaitRecord:
+    with store.edit(wait_id) as record:
+        if record.state in {WaitState.DELIVERED, WaitState.CANCELLED}:
+            return record
+        worker_pid = record.pid
+        child_pid = record.child_pid
+        record.state = WaitState.CANCELLED
+        record.error = "cancelled"
+    kill_group(child_pid)
+    kill_group(worker_pid)
+    return store.load(wait_id)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -491,33 +759,48 @@ def main() -> int:
     os.umask(0o077)
     parser = build_parser()
     args = parser.parse_args()
+    store = WaitStore(codex_home() / "long-waits")
     try:
-        def selected_delivery() -> JsonObject:
-            return delivery_value(args.remote, args.remote_auth_token_env)
-
         if args.action == "probe":
-            emit(register("probe", {}, args.message, selected_delivery()))
+            record = register(
+                store,
+                WaitKind.PROBE,
+                None,
+                args.message,
+                selected_delivery(args.remote, args.remote_auth_token_env),
+            )
+            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "after":
-            spec: JsonObject = {"seconds": args.duration, "registered_at": time.time()}
-            emit(register("after", spec, args.message, selected_delivery()))
+            record = register(
+                store,
+                WaitKind.AFTER,
+                AfterSpec(seconds=args.duration, registered_at=time.time()),
+                args.message,
+                selected_delivery(args.remote, args.remote_auth_token_env),
+            )
+            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "run":
-            spec = {
-                "command": command_value(args.command),
-                "timeout": args.timeout,
-                "max_retries": args.max_retries,
-                "retry_delay": args.retry_delay,
-            }
-            emit(register("run", spec, args.message, selected_delivery()))
+            record = register(
+                store,
+                WaitKind.RUN,
+                RunSpec(
+                    command=command_value(args.command),
+                    timeout=args.timeout,
+                    max_retries=args.max_retries,
+                    retry_delay=args.retry_delay,
+                ),
+                args.message,
+                selected_delivery(args.remote, args.remote_auth_token_env),
+            )
+            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "list":
-            records = [load_record(path.stem) for path in state_dir().glob("*.json")]
-            records.sort(key=lambda item: float(cast(float, item["created_at"])), reverse=True)
-            emit([public_record(record) for record in records])
+            print(json.dumps([record.public_dict() for record in store.list()], indent=2, sort_keys=True))
         elif args.action == "status":
-            emit(public_record(load_record(args.wait_id)))
+            print(json.dumps(store.load(args.wait_id).public_dict(), indent=2, sort_keys=True))
         elif args.action == "cancel":
-            emit(cancel(args.wait_id))
+            print(json.dumps(cancel(store, args.wait_id).public_dict(), indent=2, sort_keys=True))
         elif args.action == "_worker":
-            return worker(args.wait_id)
+            return worker(store, args.wait_id)
         return 0
     except Exception as error:
         print(f"{parser.prog}: {error}", file=sys.stderr)
@@ -526,3 +809,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

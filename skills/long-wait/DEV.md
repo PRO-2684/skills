@@ -27,6 +27,11 @@ Writes use same-directory temporary file plus `os.replace`. One worker owns each
 UUID. Cancellation locks record, marks it, then signals child and worker process
 groups.
 
+`WaitRecord` owns typed state and JSON conversion. `WaitStore` owns UUID path
+validation, locks, atomic writes, and listing. `Delivery`, `AfterSpec`, `RunSpec`,
+`WaitResult`, `WaitKind`, and `WaitState` keep dynamic JSON at storage/protocol
+boundaries; orchestration uses direct attributes.
+
 States: `pending`, `waiting`, `ready`, `delivering`, `delivered`,
 `delivery_unknown`, `cancelled`, `failed`.
 
@@ -101,4 +106,3 @@ codex steer --thread THREAD --turn TURN --message MESSAGE
 ```
 
 Do not hand-write Unix/WebSocket framing, auth, or version negotiation here.
-
