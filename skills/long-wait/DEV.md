@@ -104,6 +104,9 @@ Better probe: keep tool call active, read active turn ID, submit marker through
 `turn/steer` with exact `expectedTurnId`. Marker chips into current model turn; no
 extra turn, immediate route failure.
 
+Track upstream CLI support in
+[openai/codex#36694](https://github.com/openai/codex/issues/36694).
+
 Wait for public transport-aware CLI such as:
 
 ```bash
