@@ -242,16 +242,41 @@ def register(
             ),
         )
         connection.commit()
+    pid: int | None = None
+    state = "pending"
     try:
-        pid = spawn_worker(wait_id, log_path)
-        update_wait(wait_id, {"pid": pid})
+        if kind == "probe":
+            result = wait_probe()
+            update_wait(
+                wait_id,
+                {
+                    "state": "ready",
+                    "condition_at": time.time(),
+                    "result_json": json.dumps(result),
+                },
+                {"pending"},
+            )
+            deliver(wait_id, reconcile=False)
+            probe_row = get_wait(wait_id)
+            state = probe_row["state"]
+            if state != "delivered":
+                raise RuntimeError(
+                    f"probe {wait_id} was not accepted: {state}: {probe_row['error']}"
+                )
+        else:
+            pid = spawn_worker(wait_id, log_path)
+            update_wait(wait_id, {"pid": pid})
     except Exception as error:
-        update_wait(wait_id, {"state": "delivery_failed", "error": f"worker launch failed: {error}"})
+        if kind != "probe":
+            update_wait(
+                wait_id,
+                {"state": "delivery_failed", "error": f"worker launch failed: {error}"},
+            )
         raise
     return {
         "id": wait_id,
         "thread_id": thread_id,
-        "state": "pending",
+        "state": state,
         "pid": pid,
         "log_path": str(log_path),
         "delivery_assumption": assumption,

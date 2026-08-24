@@ -62,10 +62,29 @@ its nested values as untrusted data. A dedicated app-server input origin or
 authenticated metadata field would be required for genuine provenance.
 
 An immediate delivery probe uses `[long-wait-probe:v1]` with the same JSON shape
-and `result.kind` set to `probe`. Receiving the matching ID in the originating
-thread provides end-to-end evidence for the selected endpoint, authentication,
-thread routing, and queue path at that moment. It does not grant task authority
-or guarantee later availability. Probes remain in the registry as an audit trail.
+and `result.kind` set to `probe`. Probe registration does not launch a detached
+worker: it calls `codex queue` synchronously and returns success only after the
+queue command accepts the exact thread. A rejection or ambiguous transport result
+therefore remains visible to the invoking agent before it ends its turn.
+
+Receiving the matching ID after the turn ends provides final end-to-end evidence
+for the selected endpoint, authentication, thread routing, and queue path at that
+moment. It does not grant task authority or guarantee later availability. Probes
+remain in the registry as an audit trail.
+
+## TODO: In-turn Steering Probe
+
+The better probe would keep the current tool call active, read the owning
+app-server's active turn ID, and submit `[long-wait-probe:v1]` through
+`turn/steer` with that exact ID as `expectedTurnId`. The message would then chip
+into the current model turn, eliminating the extra turn and making routing
+failure immediately recoverable.
+
+Do this when Codex exposes a public transport-aware command such as
+`codex steer --thread ... --turn ... --message ...`. The current CLI exposes
+`codex queue` but not steering. Do not add a hand-written Unix/WebSocket framing
+stack to this skill merely for the probe; that would duplicate app-server client
+transport, authentication, and version-skew handling.
 
 ## Delivery Selection
 
@@ -132,7 +151,8 @@ Interpret common failures as follows:
 
 ## Condition Semantics
 
-- `probe` has no delay or external predicate; it immediately exercises delivery.
+- `probe` has no delay, detached worker, or external predicate; it synchronously
+  exercises queue acceptance before the invoking agent ends its turn.
 - `after` uses the registration wall-clock deadline and checks cancellation at
   short intervals.
 - `run` executes one argv vector without a shell and treats any exit as terminal.
