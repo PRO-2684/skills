@@ -1,0 +1,5 @@
+interface:
+  display_name: "Long Wait"
+  short_description: "Resume this Codex thread after a long wait"
+  default_prompt: "Use $long-wait to defer this task until the external condition is complete, then continue this same thread."
+
