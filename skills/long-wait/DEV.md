@@ -27,9 +27,6 @@ Writes use same-directory temporary file plus `os.replace`. One worker owns each
 UUID. Cancellation locks record, marks it, then signals child and worker process
 groups.
 
-Old `waits.sqlite3` belongs to pre-0.2 implementation. New code ignores it. No
-migration: delivered historical records have no runtime value.
-
 States: `pending`, `waiting`, `ready`, `delivering`, `delivered`,
 `delivery_unknown`, `cancelled`, `failed`.
 
