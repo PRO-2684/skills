@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import fcntl
 import json
 import os
@@ -330,6 +331,18 @@ class WaitStore:
         records.sort(key=lambda record: record.created_at, reverse=True)
         return records
 
+    def consume_delivered(self, wait_id: str) -> None:
+        lock_path = self.root / f"{wait_id}.lock"
+        with self._lock(wait_id):
+            record = self._load_unlocked(wait_id)
+            if record.state != WaitState.DELIVERED:
+                return
+            self._record_path(wait_id).unlink()
+            log_path = Path(record.log_path)
+            if log_path.exists() and (record.kind == WaitKind.PROBE or log_path.stat().st_size == 0):
+                log_path.unlink()
+        lock_path.unlink(missing_ok=True)
+
 
 class RpcError(RuntimeError):
     pass
@@ -484,6 +497,9 @@ def queue_message(record: WaitRecord) -> subprocess.CompletedProcess[str]:
         "status": record.result.status,
         "result": record.result.to_dict(),
     }
+    log_path = Path(record.log_path)
+    if log_path.exists() and log_path.stat().st_size:
+        payload["log_path"] = record.log_path
     marker = "[long-wait-probe:v1]" if record.kind == WaitKind.PROBE else "[long-wait:v1]"
     message = marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
     command = [codex, "queue", "--thread", record.thread_id, "--message", message]
@@ -502,6 +518,7 @@ def deliver(store: WaitStore, wait_id: str) -> None:
             raise RuntimeError("wait not ready for delivery")
         record.state = WaitState.DELIVERING
         record.error = None
+    delivered = False
     try:
         result = queue_message(store.load(wait_id))
         with store.edit(wait_id) as record:
@@ -513,11 +530,14 @@ def deliver(store: WaitStore, wait_id: str) -> None:
             else:
                 record.state = WaitState.DELIVERED
                 record.delivered_at = time.time()
+                delivered = True
     except Exception as error:
         with store.edit(wait_id) as record:
             if record.state == WaitState.DELIVERING:
                 record.state = WaitState.DELIVERY_UNKNOWN
                 record.error = str(error)
+    if delivered:
+        atexit.register(store.consume_delivered, wait_id)
 
 
 def spawn_worker(wait_id: str, log_path: Path) -> int:
@@ -809,4 +829,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -23,6 +23,11 @@ before agent ends turn when route rejects or becomes ambiguous.
 - `WAIT_ID.lock`: `flock` coordination.
 - `WAIT_ID.log`: worker and command output.
 
+Successful delivery consumes its JSON record and lock at process exit. Empty logs
+and all successful probe logs are also removed. A non-empty command log survives;
+its path is included in the wake envelope for the agent to inspect and delete.
+Failed or uncertain delivery retains every artifact for diagnosis.
+
 Writes use same-directory temporary file plus `os.replace`. One worker owns each
 UUID. Cancellation locks record, marks it, then signals child and worker process
 groups.
@@ -38,7 +43,7 @@ States: `pending`, `waiting`, `ready`, `delivering`, `delivered`,
 ## Envelope
 
 ```text
-[long-wait:v1] {"id":"...","message":"...","status":0,"result":{...}}
+[long-wait:v1] {"id":"...","message":"...","status":0,"result":{...},"log_path":"..."}
 ```
 
 Probe prefix: `[long-wait-probe:v1]`.
@@ -86,8 +91,8 @@ tail -n 100 ~/.codex/long-waits/WAIT_ID.log
 - `delivery_unknown`: inspect target thread and log. Do not blindly redeliver.
 - `waiting` plus dead worker: command must not be rerun until side-effect safety is
   known.
-- `delivered` but no turn: allow queue watcher delay; confirm same thread or resume
-  it.
+- Missing record after registration: successful delivery consumes it; check the
+  target thread and retained log.
 - Missing local thread: check `CODEX_HOME`; use explicit `--remote` when applicable.
 
 Workers survive TUI exit, not host reboot. `codex exec` cannot wake exited process;
