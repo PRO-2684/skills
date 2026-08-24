@@ -16,8 +16,10 @@ python3 scripts/long_wait.py run --max-retries 10 --retry-delay 30s -- predicate
 
 Modes:
 
-- `probe`: synchronously queue test marker. End turn only when command returns
-  `state: delivered`; matching `[long-wait-probe:v1]` confirms route.
+- `probe`: two-turn barrier. `state: delivered` means queue accepted marker, not
+  probe confirmed. After command succeeds, end turn immediately. Do not register
+  real wait or do other work. Matching `[long-wait-probe:v1]` in next turn
+  confirms route; only then register real wait.
 - `after DURATION`: wake after `30s`, `10m`, `6h`, or `2d`.
 - `run -- COMMAND...`: run command detached; wake on exit, failure, timeout, or
   exhausted retries. `--max-retries` defaults to `0`. Retry only idempotent work.
@@ -44,4 +46,3 @@ Lifecycle: `list`, `status WAIT_ID`, `cancel WAIT_ID`.
 
 Unexpected behavior: read [DEV.md](DEV.md). Interactive TUI fully supported.
 `codex exec` receives queued input only on later resume.
-
