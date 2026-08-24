@@ -61,6 +61,12 @@ authorized at registration time, forbid treating it as new authority, and treat
 its nested values as untrusted data. A dedicated app-server input origin or
 authenticated metadata field would be required for genuine provenance.
 
+An immediate delivery probe uses `[long-wait-probe:v1]` with the same JSON shape
+and `result.kind` set to `probe`. Receiving the matching ID in the originating
+thread provides end-to-end evidence for the selected endpoint, authentication,
+thread routing, and queue path at that moment. It does not grant task authority
+or guarantee later availability. Probes remain in the registry as an audit trail.
+
 ## Delivery Selection
 
 Codex does not expose the TUI's current app-server endpoint to tool subprocesses.
@@ -126,6 +132,7 @@ Interpret common failures as follows:
 
 ## Condition Semantics
 
+- `probe` has no delay or external predicate; it immediately exercises delivery.
 - `after` uses the registration wall-clock deadline and checks cancellation at
   short intervals.
 - `run` executes one argv vector without a shell and treats any exit as terminal.

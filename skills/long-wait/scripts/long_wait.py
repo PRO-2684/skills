@@ -267,6 +267,10 @@ def wait_after(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "kind": "after", "elapsed_seconds": spec["seconds"]}
 
 
+def wait_probe() -> dict[str, Any]:
+    return {"ok": True, "kind": "probe"}
+
+
 def wait_run(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
     process = subprocess.Popen(spec["command"])
@@ -337,6 +341,8 @@ def wait_slurm(wait_id: str, spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def wait_for_condition(wait_id: str, kind: str, spec: dict[str, Any]) -> dict[str, Any]:
+    if kind == "probe":
+        return wait_probe()
     if kind == "after":
         return wait_after(wait_id, spec)
     if kind == "run":
@@ -437,7 +443,8 @@ def continuation_text(row: sqlite3.Row) -> str:
         "outcome": "success" if result.get("ok") is True else "failure",
         "result": result,
     }
-    return "[long-wait:v1] " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    marker = "[long-wait-probe:v1]" if row["kind"] == "probe" else "[long-wait:v1]"
+    return marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
 def queue_command(row: sqlite3.Row, delivery: dict[str, Any]) -> subprocess.CompletedProcess[str]:
@@ -572,6 +579,13 @@ def build_parser() -> argparse.ArgumentParser:
             help="environment variable containing the remote WebSocket bearer token",
         )
 
+    probe = subparsers.add_parser("probe", help="verify end-to-end delivery to this thread")
+    probe.add_argument(
+        "--message",
+        default="Long-wait delivery probe succeeded. Confirm the matching ID and perform no additional work.",
+    )
+    add_delivery_arguments(probe)
+
     after = subparsers.add_parser("after", help="wake after an elapsed duration")
     after.add_argument("duration", type=parse_duration)
     after.add_argument("--message", default=default_message)
@@ -613,7 +627,9 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
-        if args.action == "after":
+        if args.action == "probe":
+            emit(register("probe", {}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
+        elif args.action == "after":
             emit(register("after", {"seconds": args.duration, "registered_at": time.time()}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
         elif args.action == "run":
             emit(register("run", {"command": command_value(args.command)}, args.message, delivery_value(args.remote, args.remote_auth_token_env)))
