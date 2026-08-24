@@ -1,6 +1,6 @@
 ---
 name: long-wait
-description: Defer work until time passes or a command reaches a terminal result, then continue the same primary Codex thread without agent polling. Use for waits too long for one tool call. Do not use from subagents, ephemeral threads, or transient execution environments.
+description: Defer unattended work until time passes or a command reaches a terminal result, then continue the same primary Codex thread. Use when waiting would otherwise leave the agent idle or polling for a substantial period. Do not use when brief polling is simpler, intermediate output needs attention, or from subagents, ephemeral threads, or transient execution environments.
 ---
 
 # Long Wait
