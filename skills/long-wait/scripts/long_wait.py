@@ -299,7 +299,7 @@ class WaitStore:
     def _load_unlocked(self, wait_id: str) -> WaitRecord:
         path = self._record_path(wait_id)
         if not path.exists():
-            raise ValueError(f"unknown wait ID: {wait_id}")
+            raise UnknownWaitError(f"unknown wait ID: {wait_id}")
         raw: object = json.loads(path.read_text())
         return WaitRecord.from_dict(as_mapping(raw, "wait record"))
 
@@ -327,7 +327,12 @@ class WaitStore:
             self._save_unlocked(record)
 
     def list(self) -> List[WaitRecord]:
-        records = [self.load(path.stem) for path in self.root.glob("*.json")]
+        records = []
+        for path in self.root.glob("*.json"):
+            try:
+                records.append(self.load(path.stem))
+            except UnknownWaitError:
+                continue
         records.sort(key=lambda record: record.created_at, reverse=True)
         return records
 
@@ -342,6 +347,10 @@ class WaitStore:
             if log_path.exists() and (record.kind == WaitKind.PROBE or log_path.stat().st_size == 0):
                 log_path.unlink()
         lock_path.unlink(missing_ok=True)
+
+
+class UnknownWaitError(ValueError):
+    pass
 
 
 class RpcError(RuntimeError):
@@ -741,6 +750,37 @@ def cancel(store: WaitStore, wait_id: str) -> WaitRecord:
     return store.load(wait_id)
 
 
+def resolve(
+    store: WaitStore,
+    wait_id: str,
+    resolution: str,
+    accept_duplicate_risk: bool,
+) -> WaitRecord:
+    record = store.load(wait_id)
+    if record.state != WaitState.DELIVERY_UNKNOWN:
+        raise ValueError("only delivery_unknown waits can be resolved")
+    if resolution == "delivered":
+        with store.edit(wait_id) as current:
+            if current.state != WaitState.DELIVERY_UNKNOWN:
+                raise ValueError("wait state changed during resolution")
+            current.state = WaitState.DELIVERED
+            current.delivered_at = time.time()
+            current.error = None
+            record = current
+        store.consume_delivered(wait_id)
+        return record
+    if not accept_duplicate_risk:
+        raise ValueError("retry requires --accept-duplicate-risk")
+    preflight(thread_id=record.thread_id, delivery=record.delivery)
+    with store.edit(wait_id) as current:
+        if current.state != WaitState.DELIVERY_UNKNOWN:
+            raise ValueError("wait state changed during resolution")
+        current.state = WaitState.READY
+        current.error = None
+    deliver(store, wait_id)
+    return store.load(wait_id)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Wait independently, then continue current Codex thread.")
     actions = parser.add_subparsers(dest="action", required=True)
@@ -770,6 +810,10 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("wait_id")
     cancel_parser = actions.add_parser("cancel", help="cancel wait")
     cancel_parser.add_argument("wait_id")
+    resolve_parser = actions.add_parser("resolve", help="resolve ambiguous delivery")
+    resolve_parser.add_argument("wait_id")
+    resolve_parser.add_argument("resolution", choices=("delivered", "retry"))
+    resolve_parser.add_argument("--accept-duplicate-risk", action="store_true")
     worker_parser = actions.add_parser("_worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("wait_id")
     return parser
@@ -819,6 +863,9 @@ def main() -> int:
             print(json.dumps(store.load(args.wait_id).public_dict(), indent=2, sort_keys=True))
         elif args.action == "cancel":
             print(json.dumps(cancel(store, args.wait_id).public_dict(), indent=2, sort_keys=True))
+        elif args.action == "resolve":
+            record = resolve(store, args.wait_id, args.resolution, args.accept_duplicate_risk)
+            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "_worker":
             return worker(store, args.wait_id)
         return 0
