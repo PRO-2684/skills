@@ -26,6 +26,7 @@ class WaitKind(str, Enum):
     PROBE = "probe"
     AFTER = "after"
     RUN = "run"
+    UNTIL = "until"
 
 
 class WaitState(str, Enum):
@@ -133,7 +134,28 @@ class RunSpec:
         )
 
 
-WaitSpec = Union[None, AfterSpec, RunSpec]
+@dataclass(frozen=True)
+class UntilSpec:
+    command: List[str]
+    timeout: float
+    interval: float
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"command": self.command, "timeout": self.timeout, "interval": self.interval}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> UntilSpec:
+        command = data.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+            raise ValueError("command must be a nonempty string array")
+        return cls(
+            command=[item for item in command if isinstance(item, str)],
+            timeout=required_float(data, "timeout"),
+            interval=required_float(data, "interval"),
+        )
+
+
+WaitSpec = Union[None, AfterSpec, RunSpec, UntilSpec]
 
 
 @dataclass(frozen=True)
@@ -142,6 +164,7 @@ class WaitResult:
     status: int
     reason: Optional[str] = None
     attempts: Optional[int] = None
+    checks: Optional[int] = None
     elapsed_seconds: Optional[float] = None
     error: Optional[str] = None
 
@@ -150,6 +173,7 @@ class WaitResult:
         for key, item in (
             ("reason", self.reason),
             ("attempts", self.attempts),
+            ("checks", self.checks),
             ("elapsed_seconds", self.elapsed_seconds),
             ("error", self.error),
         ):
@@ -164,6 +188,7 @@ class WaitResult:
             status=required_int(data, "status"),
             reason=optional_str(data, "reason"),
             attempts=optional_int(data, "attempts"),
+            checks=optional_int(data, "checks"),
             elapsed_seconds=optional_float(data, "elapsed_seconds"),
             error=optional_str(data, "error"),
         )
@@ -188,7 +213,7 @@ class WaitRecord:
     delivered_at: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
-        if isinstance(self.spec, (AfterSpec, RunSpec)):
+        if isinstance(self.spec, (AfterSpec, RunSpec, UntilSpec)):
             spec: object = self.spec.to_dict()
         else:
             spec = None
@@ -223,8 +248,10 @@ class WaitRecord:
             spec: WaitSpec = None
         elif kind == WaitKind.AFTER:
             spec = AfterSpec.from_dict(as_mapping(raw_spec, "spec"))
-        else:
+        elif kind == WaitKind.RUN:
             spec = RunSpec.from_dict(as_mapping(raw_spec, "spec"))
+        else:
+            spec = UntilSpec.from_dict(as_mapping(raw_spec, "spec"))
         raw_result = data.get("result")
         result = None if raw_result is None else WaitResult.from_dict(as_mapping(raw_result, "result"))
         return cls(
@@ -665,6 +692,57 @@ def run_result(store: WaitStore, wait_id: str, spec: RunSpec) -> Optional[WaitRe
     raise AssertionError("unreachable")
 
 
+def until_result(store: WaitStore, wait_id: str, spec: UntilSpec) -> Optional[WaitResult]:
+    started = time.time()
+    deadline = started + spec.timeout
+    checks = 0
+    while True:
+        if cancelled(store, wait_id):
+            return None
+        if time.time() >= deadline:
+            return WaitResult(
+                kind=WaitKind.UNTIL,
+                status=124,
+                reason="timeout",
+                checks=checks,
+                elapsed_seconds=round(time.time() - started, 3),
+            )
+        checks += 1
+        process = subprocess.Popen(spec.command, start_new_session=True)
+        with store.edit(wait_id) as record:
+            record.child_pid = process.pid
+        while process.poll() is None:
+            if cancelled(store, wait_id):
+                stop_process(process)
+                return None
+            if time.time() >= deadline:
+                stop_process(process)
+                with store.edit(wait_id) as record:
+                    record.child_pid = None
+                return WaitResult(
+                    kind=WaitKind.UNTIL,
+                    status=124,
+                    reason="timeout",
+                    checks=checks,
+                    elapsed_seconds=round(time.time() - started, 3),
+                )
+            time.sleep(0.5)
+        with store.edit(wait_id) as record:
+            record.child_pid = None
+        code = process.returncode
+        status = code if code >= 0 else 128 - code
+        if status != 1:
+            return WaitResult(
+                kind=WaitKind.UNTIL,
+                status=status,
+                reason="condition_met" if status == 0 else "predicate_failed",
+                checks=checks,
+                elapsed_seconds=round(time.time() - started, 3),
+            )
+        if not sleep_until(store, wait_id, min(time.time() + spec.interval, deadline)):
+            return None
+
+
 def worker(store: WaitStore, wait_id: str) -> int:
     with store.edit(wait_id) as record:
         if record.state != WaitState.PENDING:
@@ -677,6 +755,8 @@ def worker(store: WaitStore, wait_id: str) -> int:
             result = after_result(store, wait_id, record.spec)
         elif isinstance(record.spec, RunSpec):
             result = run_result(store, wait_id, record.spec)
+        elif isinstance(record.spec, UntilSpec):
+            result = until_result(store, wait_id, record.spec)
         else:
             raise RuntimeError("worker wait spec missing")
     except Exception as error:
@@ -783,6 +863,12 @@ def build_parser() -> argparse.ArgumentParser:
     delivery_args(run)
     run.add_argument("command", nargs=argparse.REMAINDER)
 
+    until = actions.add_parser("until", help="wake when a predicate reaches terminal result")
+    until.add_argument("--timeout", type=parse_duration, required=True)
+    until.add_argument("--interval", type=parse_duration, default=30.0)
+    delivery_args(until)
+    until.add_argument("command", nargs=argparse.REMAINDER)
+
     list_parser = actions.add_parser("list", help="list waits")
     list_parser.add_argument("--json", action="store_true", help="emit full JSON records")
     status = actions.add_parser("status", help="show wait")
@@ -831,6 +917,18 @@ def main() -> int:
                     timeout=args.timeout,
                     max_retries=args.max_retries,
                     retry_delay=args.retry_delay,
+                ),
+                args.message,
+            )
+            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+        elif args.action == "until":
+            record = register(
+                store,
+                WaitKind.UNTIL,
+                UntilSpec(
+                    command=command_value(args.command),
+                    timeout=args.timeout,
+                    interval=args.interval,
                 ),
                 args.message,
             )

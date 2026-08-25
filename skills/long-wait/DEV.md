@@ -79,8 +79,14 @@ rollback: partial side effects remain, and descendants that deliberately start a
 new session escape the original process group.
 
 No Slurm adapter. Wrap scheduler semantics in command whose exit status represents
-terminal result. No “wait until success” contract: failure, timeout, and exhausted
-retries all wake agent.
+terminal result. `run` has no “wait until success” contract: failure, timeout, and
+exhausted retries all wake agent.
+
+`until` monitors external state without owning the actual job. Predicate exit `0`
+means complete, `1` means not ready, and every other exit is terminal failure.
+`--timeout` is mandatory and covers checks plus intervals. A running predicate is
+terminated at timeout using the same process-group policy as `run`. Predicates must
+be idempotent and explicitly recognize external job failure.
 
 ## Delivery Assumptions
 

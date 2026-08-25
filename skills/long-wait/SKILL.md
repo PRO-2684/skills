@@ -12,7 +12,8 @@ Requires Linux or macOS. Native Windows is unsupported.
 python3 scripts/long_wait.py probe
 python3 scripts/long_wait.py after 6h
 python3 scripts/long_wait.py run --timeout 2d -- command arg
-python3 scripts/long_wait.py run --max-retries 10 --retry-delay 30s -- predicate arg
+python3 scripts/long_wait.py run --max-retries 10 --retry-delay 30s -- idempotent-command
+python3 scripts/long_wait.py until --timeout 2d --interval 1m -- predicate arg
 ```
 
 Modes:
@@ -24,10 +25,18 @@ Modes:
 - `after DURATION`: wake after `30s`, `10m`, `6h`, or `2d`.
 - `run -- COMMAND...`: run command detached; wake on exit, failure, timeout, or
   exhausted retries. `--max-retries` defaults to `0`. Retry only idempotent work.
+- `until --timeout DURATION -- COMMAND...`: monitor an independently supervised
+  job or durable condition. Exit `0` means complete, `1` means not ready, and any
+  other exit is terminal failure. Timeout is required.
 
 On timeout, `run` terminates the command process group, escalating from `SIGTERM`
 to `SIGKILL` after two seconds. The command may leave partial side effects, and
 descendants that deliberately create another session may survive.
+
+For expensive jobs needing live inspection, run the actual job under `tmux`,
+`screen`, systemd, or a scheduler, then use `until` with a read-only predicate.
+The predicate must detect terminal job failure; checking only for success can wait
+until timeout after the job has already failed.
 
 `--message TEXT` sets continuation note inside wake envelope. Omit for generic note.
 
