@@ -156,7 +156,7 @@ class RunSpec:
         if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
             raise ValueError("command must be a nonempty string array")
         return cls(
-            command=list(command),
+            command=[item for item in command if isinstance(item, str)],
             timeout=optional_float(data, "timeout"),
             max_retries=required_int(data, "max_retries"),
             retry_delay=required_float(data, "retry_delay"),
