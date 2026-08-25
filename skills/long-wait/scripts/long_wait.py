@@ -338,14 +338,40 @@ class WaitStore:
     def consume_delivered(self, wait_id: str) -> None:
         lock_path = self.root / f"{wait_id}.lock"
         with self._lock(wait_id):
-            record = self._load_unlocked(wait_id)
-            if record.state != WaitState.DELIVERED:
-                return
-            self._record_path(wait_id).unlink()
-            log_path = Path(record.log_path)
-            if log_path.exists() and (record.kind == WaitKind.PROBE or log_path.stat().st_size == 0):
-                log_path.unlink()
+            try:
+                record = self._load_unlocked(wait_id)
+            except UnknownWaitError:
+                record = None
+            if record is not None:
+                if record.state != WaitState.DELIVERED:
+                    return
+                self._record_path(wait_id).unlink()
+                log_path = self.root / f"{wait_id}.log"
+                if log_path.exists() and (record.kind == WaitKind.PROBE or log_path.stat().st_size == 0):
+                    log_path.unlink()
         lock_path.unlink(missing_ok=True)
+
+    def cleanup(self, wait_id: str) -> List[str]:
+        wait_id = self._checked_id(wait_id)
+        lock_path = self.root / f"{wait_id}.lock"
+        lock_existed = lock_path.exists()
+        removed: List[str] = []
+        with self._lock(wait_id):
+            try:
+                record = self._load_unlocked(wait_id)
+            except UnknownWaitError:
+                record = None
+            if record is not None and record.state != WaitState.DELIVERED:
+                raise RuntimeError(f"cannot clean wait in state {record.state.value}")
+            for suffix in ("json", "log"):
+                path = self.root / f"{wait_id}.{suffix}"
+                if path.exists():
+                    path.unlink()
+                    removed.append(path.name)
+        lock_path.unlink(missing_ok=True)
+        if lock_existed:
+            removed.append(lock_path.name)
+        return removed
 
 
 class UnknownWaitError(ValueError):
@@ -763,6 +789,29 @@ def resolve(
     return store.load(wait_id)
 
 
+def format_age(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def format_waits(records: List[WaitRecord]) -> str:
+    if not records:
+        return "No active waits."
+    rows = [("ID", "KIND", "STATE", "AGE", "WORKER")]
+    now = time.time()
+    for record in records:
+        worker = "alive" if process_alive(record.pid) else "-"
+        rows.append((record.id, record.kind.value, record.state.value, format_age(now - record.created_at), worker))
+    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+    return "\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Wait independently, then continue current Codex thread.")
     actions = parser.add_subparsers(dest="action", required=True)
@@ -785,7 +834,8 @@ def build_parser() -> argparse.ArgumentParser:
     delivery_args(run)
     run.add_argument("command", nargs=argparse.REMAINDER)
 
-    actions.add_parser("list", help="list waits")
+    list_parser = actions.add_parser("list", help="list waits")
+    list_parser.add_argument("--json", action="store_true", help="emit full JSON records")
     status = actions.add_parser("status", help="show wait")
     status.add_argument("wait_id")
     cancel_parser = actions.add_parser("cancel", help="cancel wait")
@@ -794,6 +844,8 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_parser.add_argument("wait_id")
     resolve_parser.add_argument("resolution", choices=("delivered", "retry"))
     resolve_parser.add_argument("--accept-duplicate-risk", action="store_true")
+    cleanup_parser = actions.add_parser("cleanup", help="remove artifacts for a delivered wait")
+    cleanup_parser.add_argument("wait_id")
     worker_parser = actions.add_parser("_worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("wait_id")
     return parser
@@ -838,7 +890,11 @@ def main() -> int:
             )
             print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "list":
-            print(json.dumps([record.public_dict() for record in store.list()], indent=2, sort_keys=True))
+            records = store.list()
+            if args.json:
+                print(json.dumps([record.public_dict() for record in records], indent=2, sort_keys=True))
+            else:
+                print(format_waits(records))
         elif args.action == "status":
             print(json.dumps(store.load(args.wait_id).public_dict(), indent=2, sort_keys=True))
         elif args.action == "cancel":
@@ -846,6 +902,9 @@ def main() -> int:
         elif args.action == "resolve":
             record = resolve(store, args.wait_id, args.resolution, args.accept_duplicate_risk)
             print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+        elif args.action == "cleanup":
+            removed = store.cleanup(args.wait_id)
+            print(json.dumps({"id": args.wait_id, "removed": removed}, indent=2, sort_keys=True))
         elif args.action == "_worker":
             return worker(store, args.wait_id)
         return 0

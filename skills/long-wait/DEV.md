@@ -25,7 +25,8 @@ before agent ends turn when route rejects or becomes ambiguous.
 
 Successful delivery consumes its JSON record and lock at process exit. Empty logs
 and all successful probe logs are also removed. A non-empty command log survives;
-its path is included in the wake envelope for the agent to inspect and delete.
+its path is included in the wake envelope for the agent to inspect, then remove
+with `cleanup WAIT_ID`.
 Failed or uncertain delivery retains every artifact for diagnosis.
 
 Writes use same-directory temporary file plus `os.replace`. One worker owns each
@@ -92,9 +93,15 @@ not merely forwarding an endpoint to `codex queue`.
 
 ```bash
 python3 scripts/long_wait.py list
+python3 scripts/long_wait.py list --json
 python3 scripts/long_wait.py status WAIT_ID
+python3 scripts/long_wait.py cleanup WAIT_ID
 tail -n 100 ~/.codex/long-waits/WAIT_ID.log
 ```
+
+`cleanup` is idempotent when the JSON record is absent. When a record exists, it
+refuses every state except `delivered`; ambiguous and active waits must be resolved
+or completed first.
 
 - `delivery_unknown`: inspect target thread and log. After inspection, use
   `resolve WAIT_ID delivered` when arrival is confirmed, or
