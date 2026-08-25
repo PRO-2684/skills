@@ -28,7 +28,7 @@ ln -s path/to/repo/skills/cyber-mysophobia ~/.codex/skills/cyber-mysophobia
 | --------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [Cyber Mysophobia](./skills/cyber-mysophobia)             | `cyber-mysophobia`       | Prefer idiomatic and modern approaches, disregarding compatibility      | [cyber-mysophobia.png](./images/cyber-mysophobia.png)             |
 | [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | [dependency-archaeology.png](./images/dependency-archaeology.png) |
-| [Long Wait](./skills/long-wait)                           | `long-wait`              | Resume the same Codex thread after a long-running external condition    |                                                                   |
+| [Long Wait](./skills/long-wait)                           | `long-wait`              | Resume the same Codex thread after a long-running external condition    | [long-wait.png](./images/long-wait.png)                           |
 | [Search Papers](./skills/search-papers)                   | `search-papers`          | Find conference papers before arXiv preprints                           | [search-papers.png](./images/search-papers.png)                   |
 
 <details><summary>Archived</summary>
