@@ -73,6 +73,11 @@ until active-turn steering is available.
 permits N extra attempts after nonzero exits. Use only for idempotent commands or
 predicates. `--timeout` covers command execution, retry delays, and all attempts.
 
+When timeout expires during a command, the worker sends `SIGTERM` to that command's
+process group, waits two seconds, then sends `SIGKILL`. This is termination, not
+rollback: partial side effects remain, and descendants that deliberately start a
+new session escape the original process group.
+
 No Slurm adapter. Wrap scheduler semantics in command whose exit status represents
 terminal result. No “wait until success” contract: failure, timeout, and exhausted
 retries all wake agent.

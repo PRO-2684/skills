@@ -25,6 +25,10 @@ Modes:
 - `run -- COMMAND...`: run command detached; wake on exit, failure, timeout, or
   exhausted retries. `--max-retries` defaults to `0`. Retry only idempotent work.
 
+On timeout, `run` terminates the command process group, escalating from `SIGTERM`
+to `SIGKILL` after two seconds. The command may leave partial side effects, and
+descendants that deliberately create another session may survive.
+
 `--message TEXT` sets continuation note inside wake envelope. Omit for generic note.
 
 Assume standalone Codex or the default local daemon on the same host and
