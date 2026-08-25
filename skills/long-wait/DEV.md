@@ -78,13 +78,15 @@ retries all wake agent.
 
 ## Delivery Assumptions
 
-No `--remote`: local stdio `thread/read` verifies durable primary thread; later
-`codex queue` selects embedded/default-daemon route. Explicit Unix/WebSocket server:
-pass `--remote` and optional auth-token environment variable. Endpoint must remain
-reachable from detached worker host.
+Local stdio `thread/read` verifies a durable primary thread; later `codex queue`
+selects the embedded/default-daemon route. Subagent and ephemeral queues are
+rejected by app-server.
 
-Remote mode cannot inspect source before registration. Caller must be primary
-agent. Subagent and ephemeral queues are rejected by app-server.
+The PoC intentionally does not accept explicit remote app-server endpoints.
+Remote delivery would still leave the worker, command, state, locks, and logs on
+the registration host, creating misleading durability and cleanup assumptions.
+Supporting remote delivery requires an explicit execution/storage locality model,
+not merely forwarding an endpoint to `codex queue`.
 
 ## Debug
 

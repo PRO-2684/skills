@@ -26,11 +26,10 @@ Modes:
 
 `--message TEXT` sets continuation note inside wake envelope. Omit for generic note.
 
-No `--remote`: assume standalone Codex or default local daemon on same host and
-`CODEX_HOME`; local preflight verifies durable primary thread. Known external
-app-server: pass `--remote ADDR` and optional `--remote-auth-token-env NAME`.
-Report returned wait ID and `delivery_assumption`, then end turn. Never poll from
-later agent turns.
+Assume standalone Codex or the default local daemon on the same host and
+`CODEX_HOME`; local preflight verifies a durable primary thread. Explicit remote
+app-server endpoints are unsupported. Report returned wait ID and
+`delivery_assumption`, then end turn. Never poll from later agent turns.
 
 Before ending the registration turn, consider leaving a concise status summary
 visible to the user: what is running or being awaited, wait ID, estimated

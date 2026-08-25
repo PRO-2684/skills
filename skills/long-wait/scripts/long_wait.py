@@ -41,7 +41,6 @@ class WaitState(str, Enum):
 
 class DeliveryMode(str, Enum):
     LOCAL_AUTO = "local_auto"
-    EXPLICIT_REMOTE = "explicit_remote"
 
 
 def as_mapping(value: object, name: str) -> Dict[str, object]:
@@ -453,16 +452,7 @@ def command_value(values: List[str]) -> List[str]:
     return command
 
 
-def selected_delivery(remote: Optional[str], auth_env: Optional[str]) -> Delivery:
-    if auth_env and not remote:
-        raise ValueError("--remote-auth-token-env requires --remote")
-    if remote:
-        return Delivery(
-            mode=DeliveryMode.EXPLICIT_REMOTE,
-            endpoint=remote,
-            auth_token_env=auth_env,
-            assumption="Supplied endpoint owns thread; caller is primary agent.",
-        )
+def selected_delivery() -> Delivery:
     return Delivery(
         mode=DeliveryMode.LOCAL_AUTO,
         assumption="Standalone Codex or default local daemon shares host and CODEX_HOME.",
@@ -470,8 +460,6 @@ def selected_delivery(remote: Optional[str], auth_env: Optional[str]) -> Deliver
 
 
 def preflight(thread_id: str, delivery: Delivery) -> str:
-    if delivery.mode == DeliveryMode.EXPLICIT_REMOTE:
-        return delivery.assumption
     client: Optional[AppServerClient] = None
     try:
         client = AppServerClient()
@@ -512,12 +500,6 @@ def queue_message(record: WaitRecord) -> subprocess.CompletedProcess[str]:
     marker = "[long-wait-probe:v1]" if record.kind == WaitKind.PROBE else "[long-wait:v1]"
     message = marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
     command = [codex, "queue", "--thread", record.thread_id, "--message", message]
-    if record.delivery.mode == DeliveryMode.EXPLICIT_REMOTE:
-        if record.delivery.endpoint is None:
-            raise RuntimeError("remote endpoint missing")
-        command.extend(["--remote", record.delivery.endpoint])
-        if record.delivery.auth_token_env:
-            command.extend(["--remote-auth-token-env", record.delivery.auth_token_env])
     return subprocess.run(command, check=False, capture_output=True, text=True)
 
 
@@ -787,8 +769,6 @@ def build_parser() -> argparse.ArgumentParser:
     default_message = "Long wait reached a terminal result. Continue prior task using attached result."
 
     def delivery_args(value: argparse.ArgumentParser) -> None:
-        value.add_argument("--remote", help="owning app-server ws://, wss://, or unix:// endpoint")
-        value.add_argument("--remote-auth-token-env", help="environment variable containing bearer token")
         value.add_argument("--message", default=default_message, help="continuation note in wake envelope")
 
     probe = actions.add_parser("probe", help="synchronously verify delivery route")
@@ -831,7 +811,7 @@ def main() -> int:
                 WaitKind.PROBE,
                 None,
                 args.message,
-                selected_delivery(args.remote, args.remote_auth_token_env),
+                selected_delivery(),
             )
             print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "after":
@@ -840,7 +820,7 @@ def main() -> int:
                 WaitKind.AFTER,
                 AfterSpec(seconds=args.duration, registered_at=time.time()),
                 args.message,
-                selected_delivery(args.remote, args.remote_auth_token_env),
+                selected_delivery(),
             )
             print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "run":
@@ -854,7 +834,7 @@ def main() -> int:
                     retry_delay=args.retry_delay,
                 ),
                 args.message,
-                selected_delivery(args.remote, args.remote_auth_token_env),
+                selected_delivery(),
             )
             print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
         elif args.action == "list":
