@@ -30,13 +30,13 @@ with `cleanup WAIT_ID`.
 Failed or uncertain delivery retains every artifact for diagnosis.
 
 Writes use same-directory temporary file plus `os.replace`. One worker owns each
-UUID. Cancellation locks record, marks it, then signals child and worker process
-groups.
+UUID. Cancellation locks and marks the record; the worker observes that state,
+stops its own child process group, and exits. This avoids signaling a reused PID.
 
 `WaitRecord` owns typed state and JSON conversion. `WaitStore` owns UUID path
-validation, locks, atomic writes, and listing. `Delivery`, `AfterSpec`, `RunSpec`,
-`WaitResult`, `WaitKind`, and `WaitState` keep dynamic JSON at storage/protocol
-boundaries; orchestration uses direct attributes.
+validation, locks, atomic writes, and listing. `AfterSpec`, `RunSpec`, `WaitResult`,
+`WaitKind`, and `WaitState` keep dynamic JSON at storage/protocol boundaries;
+orchestration uses direct attributes.
 
 States: `pending`, `waiting`, `ready`, `delivering`, `delivered`,
 `delivery_unknown`, `cancelled`, `failed`.
@@ -99,9 +99,9 @@ python3 scripts/long_wait.py cleanup WAIT_ID
 tail -n 100 ~/.codex/long-waits/WAIT_ID.log
 ```
 
-`cleanup` is idempotent when the JSON record is absent. When a record exists, it
-refuses every state except `delivered`; ambiguous and active waits must be resolved
-or completed first.
+`cleanup` is idempotent when the JSON record is absent. It accepts `delivered`,
+`failed`, and `cancelled` after the worker exits; ambiguous and active waits must
+be resolved or completed first.
 
 - `delivery_unknown`: inspect target thread and log. After inspection, use
   `resolve WAIT_ID delivered` when arrival is confirmed, or
@@ -111,10 +111,17 @@ or completed first.
   known.
 - Missing record after registration: successful delivery consumes it; check the
   target thread and retained log.
-- Missing local thread: check `CODEX_HOME`; use explicit `--remote` when applicable.
+- Missing local thread: check the local daemon and `CODEX_HOME`.
 
 Workers survive TUI exit, not host reboot. `codex exec` cannot wake exited process;
 queued input runs on later resume. Transient execution environments unsupported.
+
+## Platform Requirements
+
+The PoC supports Linux and macOS only. It depends on `fcntl.flock`, POSIX process
+groups, `start_new_session`, and Unix signals. Native Windows is intentionally
+unsupported until locking, detachment, and process-tree termination have explicit
+Windows implementations and end-to-end coverage.
 
 ## TODO: Steering Probe
 

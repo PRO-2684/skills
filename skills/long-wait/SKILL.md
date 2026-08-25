@@ -6,6 +6,7 @@ description: Defer unattended work until time passes or a command reaches a term
 # Long Wait
 
 Run `scripts/long_wait.py` from this skill directory. Primary agent only.
+Requires Linux or macOS. Native Windows is unsupported.
 
 ```bash
 python3 scripts/long_wait.py probe
