@@ -29,9 +29,12 @@ Modes:
 Assume standalone Codex or the default local daemon on the same host and
 `CODEX_HOME`; local preflight verifies a durable primary thread. Explicit remote
 app-server endpoints are unsupported. Report returned wait ID and
-`delivery_assumption`, then end turn. Never poll from later agent turns.
+`delivery_assumption`. Continue other useful work when available. Inspect the
+returned record, or use a status check when needed to confirm setup, but do not
+repeatedly poll. If nothing remains except waiting, end the turn; the queued
+envelope will resume the thread when ready.
 
-Before ending the registration turn, consider leaving a concise status summary
+Before leaving the wait unattended, consider leaving a concise status summary
 visible to the user: what is running or being awaited, wait ID, estimated
 completion when known, timeout when configured, retry policy when applicable,
 and delivery assumption. Do not invent an estimate.
