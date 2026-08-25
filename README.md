@@ -24,20 +24,20 @@ ln -s path/to/repo/skills/cyber-mysophobia ~/.codex/skills/cyber-mysophobia
 
 ## List
 
-| Name                                                      | Slug                     | Desc                                                                    | Pic?                                                           |
-| --------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [Cyber Mysophobia](./skills/cyber-mysophobia)             | `cyber-mysophobia`       | Prefer idiomatic and modern approaches, disregarding compatibility      | ![cyber-mysophobia](./images/cyber-mysophobia.png)             |
-| [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | ![dependency-archaeology](./images/dependency-archaeology.png) |
-| [Long Wait](./skills/long-wait)                           | `long-wait`              | Resume the same Codex thread after a long-running external condition    |                                                                |
-| [Search Papers](./skills/search-papers)                   | `search-papers`          | Find conference papers before arXiv preprints                           | ![search-papers](./images/search-papers.png)                   |
+| Name                                                      | Slug                     | Desc                                                                    | Pic?                                                              |
+| --------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| [Cyber Mysophobia](./skills/cyber-mysophobia)             | `cyber-mysophobia`       | Prefer idiomatic and modern approaches, disregarding compatibility      | [cyber-mysophobia.png](./images/cyber-mysophobia.png)             |
+| [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | [dependency-archaeology.png](./images/dependency-archaeology.png) |
+| [Long Wait](./skills/long-wait)                           | `long-wait`              | Resume the same Codex thread after a long-running external condition    |                                                                   |
+| [Search Papers](./skills/search-papers)                   | `search-papers`          | Find conference papers before arXiv preprints                           | [search-papers.png](./images/search-papers.png)                   |
 
 <details><summary>Archived</summary>
 
 These skills are archived and not actively used personally:
 
-| Name                      | Slug     | Reason                                      | Pic?                           |
-| ------------------------- | -------- | ------------------------------------------- | ------------------------------ |
-| [Debate](./skills/debate) | `debate` | Kinda useless; should use `grill-with-docs` | ![debate](./images/debate.png) |
+| Name                      | Slug     | Reason                                      | Pic?                              |
+| ------------------------- | -------- | ------------------------------------------- | --------------------------------- |
+| [Debate](./skills/debate) | `debate` | Kinda useless; should use `grill-with-docs` | [debate.png](./images/debate.png) |
 
 </details>
 
