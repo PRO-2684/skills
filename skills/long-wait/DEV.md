@@ -38,6 +38,25 @@ validation, locks, atomic writes, and listing. `AfterSpec`, `RunSpec`, `WaitResu
 `WaitKind`, and `WaitState` keep dynamic JSON at storage/protocol boundaries;
 orchestration uses direct attributes.
 
+## CLI Output
+
+Every public command defaults to human-readable output and accepts `--json` for
+full structured output. Registration and `status` use one labeled record
+renderer with kind-specific spec and result fields. `list` uses a compact table;
+`cancel` and `resolve` print their action and resulting state; `cleanup` prints
+removed filenames or `Nothing to remove.` Errors stay on stderr with nonzero
+status.
+
+Scripts and agents needing a stable machine-readable contract must pass
+`--json`. This is an intentional PoC output change; no generic format-selection
+API is provided. Internal `_worker` has no output option.
+
+`list` reads all local records, then filters to `CODEX_THREAD_ID` by default. Its
+human header reports shown/all counts. `list --all` disables filtering. When
+`CODEX_THREAD_ID` is absent, default `list` also shows every record and labels the
+scope as all waits on the current machine. JSON output follows the same scope and
+remains an array; empty human output retains its scope header.
+
 States: `pending`, `waiting`, `ready`, `delivering`, `delivered`,
 `delivery_unknown`, `cancelled`, `failed`.
 
@@ -104,9 +123,9 @@ not merely forwarding an endpoint to `codex queue`.
 
 ```bash
 python3 scripts/long_wait.py list
-python3 scripts/long_wait.py list --json
-python3 scripts/long_wait.py status WAIT_ID
-python3 scripts/long_wait.py cleanup WAIT_ID
+python3 scripts/long_wait.py list --all --json
+python3 scripts/long_wait.py status WAIT_ID --json
+python3 scripts/long_wait.py cleanup WAIT_ID --json
 tail -n 100 ~/.codex/long-waits/WAIT_ID.log
 ```
 

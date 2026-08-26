@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Focused CLI checks for long_wait.py."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from typing import Dict, List, Optional
+
+
+SCRIPT = Path(__file__).with_name("long_wait.py")
+ID_A = "00000000-0000-4000-8000-000000000001"
+ID_B = "00000000-0000-4000-8000-000000000002"
+ID_C = "00000000-0000-4000-8000-000000000003"
+ID_D = "00000000-0000-4000-8000-000000000004"
+
+
+def record(
+    wait_id: str, thread_id: str, kind: str = "after", state: str = "waiting"
+) -> Dict[str, object]:
+    specs: Dict[str, object] = {
+        "probe": None,
+        "after": {"seconds": 3600.0, "registered_at": time.time()},
+        "run": {
+            "command": ["echo", "hello world"],
+            "timeout": 60.0,
+            "max_retries": 2,
+            "retry_delay": 5.0,
+        },
+        "until": {
+            "command": ["test", "-f", "/tmp/done"],
+            "timeout": 120.0,
+            "interval": 10.0,
+        },
+    }
+    return {
+        "id": wait_id,
+        "thread_id": thread_id,
+        "kind": kind,
+        "spec": specs[kind],
+        "message": "Continue work.",
+        "delivery_assumption": "Local durable thread verified.",
+        "state": state,
+        "pid": None,
+        "child_pid": None,
+        "created_at": time.time(),
+        "condition_at": None,
+        "delivered_at": None,
+        "log_path": "",
+        "result": None,
+        "error": None,
+    }
+
+
+class LongWaitCliTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.home = Path(self.temporary.name)
+        self.store = self.home / "long-waits"
+        self.store.mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write(self, value: Dict[str, object]) -> None:
+        (self.store / f"{value['id']}.json").write_text(json.dumps(value))
+
+    def run_cli(
+        self, *args: str, thread_id: Optional[str] = "thread-a", check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        environment["CODEX_HOME"] = str(self.home)
+        if thread_id is None:
+            environment.pop("CODEX_THREAD_ID", None)
+        else:
+            environment["CODEX_THREAD_ID"] = thread_id
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args],
+            check=check,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+
+    def test_list_scopes_human_and_json_output(self) -> None:
+        self.write(record(ID_A, "thread-a"))
+        self.write(record(ID_B, "thread-b"))
+
+        scoped = self.run_cli("list").stdout
+        self.assertIn("Waits of current thread thread-a (1/2):", scoped)
+        self.assertIn(ID_A, scoped)
+        self.assertNotIn(ID_B, scoped)
+        self.assertEqual(
+            [item["id"] for item in json.loads(self.run_cli("list", "--json").stdout)],
+            [ID_A],
+        )
+
+        all_human = self.run_cli("list", "--all").stdout
+        self.assertIn("All waits on current machine (2):", all_human)
+        self.assertIn(ID_A, all_human)
+        self.assertIn(ID_B, all_human)
+        self.assertEqual(
+            len(json.loads(self.run_cli("list", "--all", "--json").stdout)), 2
+        )
+        self.assertIn(
+            "All waits on current machine (2):",
+            self.run_cli("list", thread_id=None).stdout,
+        )
+
+    def test_empty_list_retains_scope(self) -> None:
+        self.assertEqual(
+            self.run_cli("list").stdout,
+            "Waits of current thread thread-a (0/0):\nNo waits.\n",
+        )
+        self.assertEqual(
+            self.run_cli("list", thread_id=None).stdout,
+            "All waits on current machine (0):\nNo waits.\n",
+        )
+        self.assertEqual(json.loads(self.run_cli("list", "--json").stdout), [])
+
+    def test_record_kinds_render_human_and_json(self) -> None:
+        for wait_id, kind in zip(
+            (ID_A, ID_B, ID_C, ID_D), ("probe", "after", "run", "until")
+        ):
+            self.write(record(wait_id, "thread-a", kind))
+            human = self.run_cli("status", wait_id).stdout
+            self.assertIn("Wait status:", human)
+            self.assertIn(f"Kind: {kind}", human)
+            structured = json.loads(self.run_cli("status", wait_id, "--json").stdout)
+            self.assertEqual(structured["kind"], kind)
+
+        self.assertIn("Delay: 1h", self.run_cli("status", ID_B).stdout)
+        self.assertIn(
+            "Command: echo 'hello world'", self.run_cli("status", ID_C).stdout
+        )
+        self.assertIn(
+            "Predicate: test -f /tmp/done", self.run_cli("status", ID_D).stdout
+        )
+
+    def test_cancel_resolve_and_cleanup_render_human_and_json(self) -> None:
+        self.write(record(ID_A, "thread-a"))
+        self.assertEqual(
+            self.run_cli("cancel", ID_A).stdout,
+            f"Cancelled {ID_A}: state=cancelled.\n",
+        )
+        self.assertEqual(
+            json.loads(self.run_cli("cancel", ID_A, "--json").stdout)["state"],
+            "cancelled",
+        )
+
+        self.write(record(ID_B, "thread-a", state="delivery_unknown"))
+        resolved = self.run_cli("resolve", ID_B, "delivered").stdout
+        self.assertEqual(resolved, f"Resolved (delivered) {ID_B}: state=delivered.\n")
+
+        self.write(record(ID_C, "thread-a", state="delivery_unknown"))
+        self.assertEqual(
+            json.loads(self.run_cli("resolve", ID_C, "delivered", "--json").stdout)[
+                "state"
+            ],
+            "delivered",
+        )
+
+        self.write(record(ID_D, "thread-a", state="failed"))
+        (self.store / f"{ID_D}.log").write_text("failure\n")
+        cleanup = self.run_cli("cleanup", ID_D).stdout
+        self.assertIn(f"Removed: {ID_D}.json, {ID_D}.log", cleanup)
+        self.assertEqual(self.run_cli("cleanup", ID_D).stdout, "Nothing to remove.\n")
+        self.assertEqual(
+            json.loads(self.run_cli("cleanup", ID_D, "--json").stdout)["removed"], []
+        )
+
+    def test_json_flag_is_accepted_by_registration_commands(self) -> None:
+        commands: List[List[str]] = [
+            ["probe", "--json"],
+            ["after", "--json", "1h"],
+            ["run", "--json", "--", "true"],
+            ["until", "--json", "--timeout", "1s", "--", "true"],
+        ]
+        for command in commands:
+            result = self.run_cli(*command, thread_id=None, check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("CODEX_THREAD_ID unavailable", result.stderr)
+            self.assertNotIn("unrecognized arguments", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

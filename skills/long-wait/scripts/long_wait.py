@@ -9,6 +9,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -124,7 +125,11 @@ class RunSpec:
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> RunSpec:
         command = data.get("command")
-        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(item, str) for item in command)
+        ):
             raise ValueError("command must be a nonempty string array")
         return cls(
             command=[item for item in command if isinstance(item, str)],
@@ -141,12 +146,20 @@ class UntilSpec:
     interval: float
 
     def to_dict(self) -> Dict[str, object]:
-        return {"command": self.command, "timeout": self.timeout, "interval": self.interval}
+        return {
+            "command": self.command,
+            "timeout": self.timeout,
+            "interval": self.interval,
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> UntilSpec:
         command = data.get("command")
-        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(item, str) for item in command)
+        ):
             raise ValueError("command must be a nonempty string array")
         return cls(
             command=[item for item in command if isinstance(item, str)],
@@ -253,7 +266,11 @@ class WaitRecord:
         else:
             spec = UntilSpec.from_dict(as_mapping(raw_spec, "spec"))
         raw_result = data.get("result")
-        result = None if raw_result is None else WaitResult.from_dict(as_mapping(raw_result, "result"))
+        result = (
+            None
+            if raw_result is None
+            else WaitResult.from_dict(as_mapping(raw_result, "result"))
+        )
         return cls(
             id=required_str(data, "id"),
             thread_id=required_str(data, "thread_id"),
@@ -302,7 +319,9 @@ class WaitStore:
     def _save_unlocked(self, record: WaitRecord) -> None:
         path = self._record_path(record.id)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(record.to_dict(), indent=2, sort_keys=True) + "\n")
+        temporary.write_text(
+            json.dumps(record.to_dict(), indent=2, sort_keys=True) + "\n"
+        )
         os.replace(temporary, path)
 
     def create(self, record: WaitRecord) -> None:
@@ -344,7 +363,9 @@ class WaitStore:
                     return
                 self._record_path(wait_id).unlink()
                 log_path = self.root / f"{wait_id}.log"
-                if log_path.exists() and (record.kind == WaitKind.PROBE or log_path.stat().st_size == 0):
+                if log_path.exists() and (
+                    record.kind == WaitKind.PROBE or log_path.stat().st_size == 0
+                ):
                     log_path.unlink()
         lock_path.unlink(missing_ok=True)
 
@@ -361,9 +382,13 @@ class WaitStore:
             if record is not None and record.state != WaitState.DELIVERED:
                 cleanable = {WaitState.CANCELLED, WaitState.FAILED}
                 if record.state not in cleanable:
-                    raise RuntimeError(f"cannot clean wait in state {record.state.value}")
+                    raise RuntimeError(
+                        f"cannot clean wait in state {record.state.value}"
+                    )
                 if record.state == WaitState.CANCELLED and process_alive(record.pid):
-                    raise RuntimeError("cannot clean cancelled wait while worker is alive")
+                    raise RuntimeError(
+                        "cannot clean cancelled wait while worker is alive"
+                    )
             for suffix in ("json", "log"):
                 path = self.root / f"{wait_id}.{suffix}"
                 if path.exists():
@@ -402,7 +427,11 @@ class AppServerClient:
         self.call(
             "initialize",
             {
-                "clientInfo": {"name": "long_wait", "title": "Long Wait", "version": "0.3.0"},
+                "clientInfo": {
+                    "name": "long_wait",
+                    "title": "Long Wait",
+                    "version": "0.3.0",
+                },
                 "capabilities": {"experimentalApi": True},
             },
         )
@@ -483,7 +512,9 @@ def preflight(thread_id: str) -> str:
     client: Optional[AppServerClient] = None
     try:
         client = AppServerClient()
-        response = client.call("thread/read", {"threadId": thread_id, "includeTurns": False})
+        response = client.call(
+            "thread/read", {"threadId": thread_id, "includeTurns": False}
+        )
         thread = as_mapping(response.get("thread"), "thread")
         source = thread.get("source")
         if thread.get("ephemeral"):
@@ -491,11 +522,14 @@ def preflight(thread_id: str) -> str:
         if (
             thread.get("parentThreadId")
             or thread.get("threadSource") == "subagent"
-            or isinstance(source, dict) and "subAgent" in source
+            or isinstance(source, dict)
+            and "subAgent" in source
         ):
             raise RuntimeError("primary agent required")
     except RpcError as error:
-        raise RuntimeError(f"local preflight failed ({error}); check local daemon and CODEX_HOME") from error
+        raise RuntimeError(
+            f"local preflight failed ({error}); check local daemon and CODEX_HOME"
+        ) from error
     finally:
         if client:
             client.close()
@@ -517,10 +551,14 @@ def queue_message(record: WaitRecord) -> subprocess.CompletedProcess[str]:
     log_path = Path(record.log_path)
     if log_path.exists() and log_path.stat().st_size:
         payload["log_path"] = record.log_path
-    marker = "[long-wait-probe:v1]" if record.kind == WaitKind.PROBE else "[long-wait:v1]"
+    marker = (
+        "[long-wait-probe:v1]" if record.kind == WaitKind.PROBE else "[long-wait:v1]"
+    )
     message = marker + " " + json.dumps(payload, separators=(",", ":"), sort_keys=True)
     command = [codex, "queue", "--thread", record.thread_id, "--message", message]
-    return subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
+    return subprocess.run(
+        command, check=False, capture_output=True, text=True, timeout=30
+    )
 
 
 def deliver(store: WaitStore, wait_id: str) -> None:
@@ -537,7 +575,11 @@ def deliver(store: WaitStore, wait_id: str) -> None:
                 return
             if result.returncode:
                 record.state = WaitState.DELIVERY_UNKNOWN
-                record.error = result.stderr.strip() or result.stdout.strip() or f"codex queue exited {result.returncode}"
+                record.error = (
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or f"codex queue exited {result.returncode}"
+                )
             else:
                 record.state = WaitState.DELIVERED
                 record.delivered_at = time.time()
@@ -573,7 +615,9 @@ def register(
 ) -> WaitRecord:
     thread_id = os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
-        raise RuntimeError("CODEX_THREAD_ID unavailable; register from Codex tool command")
+        raise RuntimeError(
+            "CODEX_THREAD_ID unavailable; register from Codex tool command"
+        )
     assumption = preflight(thread_id)
     wait_id = str(uuid.uuid4())
     record = WaitRecord(
@@ -595,7 +639,9 @@ def register(
         deliver(store, wait_id)
         record = store.load(wait_id)
         if record.state != WaitState.DELIVERED:
-            raise RuntimeError(f"probe {wait_id} not accepted: {record.state.value}: {record.error}")
+            raise RuntimeError(
+                f"probe {wait_id} not accepted: {record.state.value}: {record.error}"
+            )
     else:
         try:
             pid = spawn_worker(wait_id, Path(record.log_path))
@@ -621,7 +667,9 @@ def sleep_until(store: WaitStore, wait_id: str, deadline: float) -> bool:
     return True
 
 
-def after_result(store: WaitStore, wait_id: str, spec: AfterSpec) -> Optional[WaitResult]:
+def after_result(
+    store: WaitStore, wait_id: str, spec: AfterSpec
+) -> Optional[WaitResult]:
     if not sleep_until(store, wait_id, spec.registered_at + spec.seconds):
         return None
     return WaitResult(kind=WaitKind.AFTER, status=0, elapsed_seconds=spec.seconds)
@@ -692,7 +740,9 @@ def run_result(store: WaitStore, wait_id: str, spec: RunSpec) -> Optional[WaitRe
     raise AssertionError("unreachable")
 
 
-def until_result(store: WaitStore, wait_id: str, spec: UntilSpec) -> Optional[WaitResult]:
+def until_result(
+    store: WaitStore, wait_id: str, spec: UntilSpec
+) -> Optional[WaitResult]:
     started = time.time()
     deadline = started + spec.timeout
     checks = 0
@@ -829,58 +879,168 @@ def format_age(seconds: float) -> str:
     return f"{seconds // 86400}d"
 
 
-def format_waits(records: List[WaitRecord]) -> str:
+def format_record(record: WaitRecord, heading: str) -> str:
+    lines = [
+        heading,
+        f"  ID: {record.id}",
+        f"  Kind: {record.kind.value}",
+        f"  State: {record.state.value}",
+        f"  Thread: {record.thread_id}",
+        f"  Age: {format_age(time.time() - record.created_at)}",
+        f"  Worker: {'alive' if process_alive(record.pid) else '-'}",
+    ]
+    if isinstance(record.spec, AfterSpec):
+        lines.append(f"  Delay: {format_age(record.spec.seconds)}")
+    elif isinstance(record.spec, RunSpec):
+        lines.extend(
+            (
+                f"  Command: {shlex.join(record.spec.command)}",
+                f"  Timeout: {format_age(record.spec.timeout) if record.spec.timeout is not None else '-'}",
+                f"  Max retries: {record.spec.max_retries}",
+                f"  Retry delay: {format_age(record.spec.retry_delay)}",
+            )
+        )
+    elif isinstance(record.spec, UntilSpec):
+        lines.extend(
+            (
+                f"  Predicate: {shlex.join(record.spec.command)}",
+                f"  Timeout: {format_age(record.spec.timeout)}",
+                f"  Interval: {format_age(record.spec.interval)}",
+            )
+        )
+    if record.result is not None:
+        result = record.result.to_dict()
+        lines.append(
+            "  Result: " + ", ".join(f"{key}={value}" for key, value in result.items())
+        )
+    if record.error:
+        lines.append(f"  Error: {record.error}")
+    lines.extend(
+        (
+            f"  Message: {record.message}",
+            f"  Delivery assumption: {record.delivery_assumption}",
+        )
+    )
+    return "\n".join(lines)
+
+
+def format_waits(
+    records: List[WaitRecord], total: int, thread_id: Optional[str]
+) -> str:
+    if thread_id is None:
+        header = f"All waits on current machine ({len(records)}):"
+    else:
+        header = f"Waits of current thread {thread_id} ({len(records)}/{total}):"
     if not records:
-        return "No waits."
+        return f"{header}\nNo waits."
     rows = [("ID", "KIND", "STATE", "AGE", "WORKER")]
     now = time.time()
     for record in records:
         worker = "alive" if process_alive(record.pid) else "-"
-        rows.append((record.id, record.kind.value, record.state.value, format_age(now - record.created_at), worker))
+        rows.append(
+            (
+                record.id,
+                record.kind.value,
+                record.state.value,
+                format_age(now - record.created_at),
+                worker,
+            )
+        )
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
-    return "\n".join("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows)
+    table = "\n".join(
+        "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+        for row in rows
+    )
+    return f"{header}\n{table}"
+
+
+def print_json(value: object) -> None:
+    print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def print_record(record: WaitRecord, json_output: bool, heading: str) -> None:
+    if json_output:
+        print_json(record.public_dict())
+    else:
+        print(format_record(record, heading))
+
+
+def print_action(record: WaitRecord, json_output: bool, action: str) -> None:
+    if json_output:
+        print_json(record.public_dict())
+    else:
+        print(f"{action} {record.id}: state={record.state.value}.")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Wait independently, then continue current Codex thread.")
+    parser = argparse.ArgumentParser(
+        description="Wait independently, then continue current Codex thread."
+    )
     actions = parser.add_subparsers(dest="action", required=True)
     default_message = "Long wait reached a terminal result. Continue prior task using attached result."
 
     def delivery_args(value: argparse.ArgumentParser) -> None:
-        value.add_argument("--message", default=default_message, help="continuation note in wake envelope")
+        value.add_argument(
+            "--message",
+            default=default_message,
+            help="continuation note in wake envelope",
+        )
+
+    def json_arg(value: argparse.ArgumentParser) -> None:
+        value.add_argument("--json", action="store_true", help="emit full JSON output")
 
     probe = actions.add_parser("probe", help="synchronously verify delivery route")
     delivery_args(probe)
+    json_arg(probe)
 
     after = actions.add_parser("after", help="wake after duration")
     after.add_argument("duration", type=parse_duration)
     delivery_args(after)
+    json_arg(after)
 
     run = actions.add_parser("run", help="wake when command reaches terminal result")
-    run.add_argument("--timeout", type=parse_duration, help="overall timeout across attempts")
+    run.add_argument(
+        "--timeout", type=parse_duration, help="overall timeout across attempts"
+    )
     run.add_argument("--max-retries", type=nonnegative, default=0)
     run.add_argument("--retry-delay", type=parse_duration, default=30.0)
     delivery_args(run)
+    json_arg(run)
     run.add_argument("command", nargs=argparse.REMAINDER)
 
-    until = actions.add_parser("until", help="wake when a predicate reaches terminal result")
+    until = actions.add_parser(
+        "until", help="wake when a predicate reaches terminal result"
+    )
     until.add_argument("--timeout", type=parse_duration, required=True)
     until.add_argument("--interval", type=parse_duration, default=30.0)
     delivery_args(until)
+    json_arg(until)
     until.add_argument("command", nargs=argparse.REMAINDER)
 
     list_parser = actions.add_parser("list", help="list waits")
-    list_parser.add_argument("--json", action="store_true", help="emit full JSON records")
+    list_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_waits",
+        help="include waits from all threads",
+    )
+    json_arg(list_parser)
     status = actions.add_parser("status", help="show wait")
     status.add_argument("wait_id")
+    json_arg(status)
     cancel_parser = actions.add_parser("cancel", help="cancel wait")
     cancel_parser.add_argument("wait_id")
+    json_arg(cancel_parser)
     resolve_parser = actions.add_parser("resolve", help="resolve ambiguous delivery")
     resolve_parser.add_argument("wait_id")
     resolve_parser.add_argument("resolution", choices=("delivered", "retry"))
     resolve_parser.add_argument("--accept-duplicate-risk", action="store_true")
-    cleanup_parser = actions.add_parser("cleanup", help="remove artifacts for a delivered wait")
+    json_arg(resolve_parser)
+    cleanup_parser = actions.add_parser(
+        "cleanup", help="remove artifacts for a delivered wait"
+    )
     cleanup_parser.add_argument("wait_id")
+    json_arg(cleanup_parser)
     worker_parser = actions.add_parser("_worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("wait_id")
     return parser
@@ -899,7 +1059,7 @@ def main() -> int:
                 None,
                 args.message,
             )
-            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+            print_record(record, args.json, "Wait registered:")
         elif args.action == "after":
             record = register(
                 store,
@@ -907,7 +1067,7 @@ def main() -> int:
                 AfterSpec(seconds=args.duration, registered_at=time.time()),
                 args.message,
             )
-            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+            print_record(record, args.json, "Wait registered:")
         elif args.action == "run":
             record = register(
                 store,
@@ -920,7 +1080,7 @@ def main() -> int:
                 ),
                 args.message,
             )
-            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+            print_record(record, args.json, "Wait registered:")
         elif args.action == "until":
             record = register(
                 store,
@@ -932,23 +1092,38 @@ def main() -> int:
                 ),
                 args.message,
             )
-            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+            print_record(record, args.json, "Wait registered:")
         elif args.action == "list":
-            records = store.list()
+            all_records = store.list()
+            thread_id = None if args.all_waits else os.environ.get("CODEX_THREAD_ID")
+            records = (
+                all_records
+                if thread_id is None
+                else [record for record in all_records if record.thread_id == thread_id]
+            )
             if args.json:
-                print(json.dumps([record.public_dict() for record in records], indent=2, sort_keys=True))
+                print_json([record.public_dict() for record in records])
             else:
-                print(format_waits(records))
+                print(format_waits(records, len(all_records), thread_id))
         elif args.action == "status":
-            print(json.dumps(store.load(args.wait_id).public_dict(), indent=2, sort_keys=True))
+            print_record(store.load(args.wait_id), args.json, "Wait status:")
         elif args.action == "cancel":
-            print(json.dumps(cancel(store, args.wait_id).public_dict(), indent=2, sort_keys=True))
+            print_action(cancel(store, args.wait_id), args.json, "Cancelled")
         elif args.action == "resolve":
-            record = resolve(store, args.wait_id, args.resolution, args.accept_duplicate_risk)
-            print(json.dumps(record.public_dict(), indent=2, sort_keys=True))
+            record = resolve(
+                store, args.wait_id, args.resolution, args.accept_duplicate_risk
+            )
+            print_action(record, args.json, f"Resolved ({args.resolution})")
         elif args.action == "cleanup":
             removed = store.cleanup(args.wait_id)
-            print(json.dumps({"id": args.wait_id, "removed": removed}, indent=2, sort_keys=True))
+            if args.json:
+                print_json({"id": args.wait_id, "removed": removed})
+            else:
+                print(
+                    "Removed: " + ", ".join(removed)
+                    if removed
+                    else "Nothing to remove."
+                )
         elif args.action == "_worker":
             return worker(store, args.wait_id)
         return 0

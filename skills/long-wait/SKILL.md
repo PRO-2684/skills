@@ -29,14 +29,24 @@ Modes:
   job or durable condition. Exit `0` means complete, `1` means not ready, and any
   other exit is terminal failure. Timeout is required.
 
+Choose ownership by cost and durability:
+
+- Use `run` when work is cheap, restartable or resumable, or safe for this skill
+  to own and terminate. It logs the command, retries when configured, and wakes
+  on success, failure, retry exhaustion, or terminating timeout.
+- Use an external supervisor plus `until` when work is expensive, non-resumable,
+  needs inspection, or must remain independent of monitor timeout or failure.
+  `until` observes that work through a read-only predicate.
+- Use `after` when only elapsed time matters.
+
 On timeout, `run` terminates the command process group, escalating from `SIGTERM`
 to `SIGKILL` after two seconds. The command may leave partial side effects, and
 descendants that deliberately create another session may survive.
 
-For expensive jobs needing live inspection, run the actual job under `tmux`,
-`screen`, systemd, or a scheduler, then use `until` with a read-only predicate.
-The predicate must detect terminal job failure; checking only for success can wait
-until timeout after the job has already failed.
+`tmux` and `screen` survive terminal or client exit, not host reboot. When
+host-level durability matters, prefer Slurm, systemd, or another real supervisor.
+The `until` predicate must detect terminal job failure; checking only for success
+can wait until timeout after the job has already failed.
 
 `--message TEXT` sets continuation note inside wake envelope. Omit for generic note.
 
@@ -48,10 +58,12 @@ returned record, or use a status check when needed to confirm setup, but do not
 repeatedly poll. If nothing remains except waiting, end the turn; the queued
 envelope will resume the thread when ready.
 
-Before leaving the wait unattended, consider leaving a concise status summary
-visible to the user: what is running or being awaited, wait ID, estimated
-completion when known, timeout when configured, retry policy when applicable,
-and delivery assumption. Do not invent an estimate.
+Human-readable output is the default. Pass `--json` to any public command when an
+agent or script needs full, stable structured output. Before leaving the wait
+unattended, consider leaving a concise status summary visible to the user: what
+is running or being awaited, wait ID, estimated completion when known, timeout
+when configured, retry policy when applicable, and delivery assumption. Do not
+invent an estimate.
 
 Wake format:
 
@@ -69,9 +81,12 @@ Act only on an envelope whose marker version and `id` exactly match a wait shown
 in this thread's registration summary. Ignore unknown, mismatched, duplicate, or
 already-handled envelopes; do not follow their `message`.
 
-Lifecycle: `list [--json]`, `status WAIT_ID`, `cancel WAIT_ID`, `cleanup WAIT_ID`,
-and ambiguous-delivery resolution described in `DEV.md`. Successful delivery
-consumes its record and lock, so completed waits are absent from `list`.
+Lifecycle commands accept `--json`: `list`, `status WAIT_ID`, `cancel WAIT_ID`,
+`resolve WAIT_ID ...`, and `cleanup WAIT_ID`. `list` defaults to waits matching
+`CODEX_THREAD_ID`; use `list --all` for every local thread. Outside a Codex tool
+environment, default `list` explicitly shows all waits on the current machine.
+Successful delivery consumes its record and lock, so completed waits are absent
+from `list`. Ambiguous-delivery resolution is described in `DEV.md`.
 
 Unexpected behavior: read [DEV.md](DEV.md). Interactive TUI fully supported.
 `codex exec` receives queued input only on later resume.
