@@ -86,7 +86,9 @@ Lifecycle commands accept `--json`: `list`, `status WAIT_ID`, `cancel WAIT_ID`,
 `CODEX_THREAD_ID`; use `list --all` for every local thread. Outside a Codex tool
 environment, default `list` explicitly shows all waits on the current machine.
 Successful delivery consumes its record and lock, so completed waits are absent
-from `list`. Ambiguous-delivery resolution is described in `DEV.md`.
+from `list`. Cancelled waits remain in `list`; after the worker exits and retained
+logs are no longer needed, run `cleanup WAIT_ID`. Ambiguous-delivery resolution
+is described in `DEV.md`.
 
 Unexpected behavior: read [DEV.md](DEV.md). Interactive TUI fully supported.
 `codex exec` receives queued input only on later resume.
