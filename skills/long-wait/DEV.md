@@ -47,6 +47,10 @@ renderer with kind-specific spec and result fields. `list` uses a compact table;
 removed filenames or `Nothing to remove.` Errors stay on stderr with nonzero
 status.
 
+The list table's `AGE/LIMIT` column combines record age with the configured
+`after` delay or overall `run`/`until` timeout. When no limit exists, it shows
+age alone.
+
 Scripts and agents needing a stable machine-readable contract must pass
 `--json`. This is an intentional PoC output change; no generic format-selection
 API is provided. Internal `_worker` has no output option.

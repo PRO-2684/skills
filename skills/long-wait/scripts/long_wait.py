@@ -933,16 +933,26 @@ def format_waits(
         header = f"Waits of current thread {thread_id} ({len(records)}/{total}):"
     if not records:
         return f"{header}\nNo waits."
-    rows = [("ID", "KIND", "STATE", "AGE", "WORKER")]
+    rows = [("ID", "KIND", "STATE", "AGE/LIMIT", "WORKER")]
     now = time.time()
     for record in records:
         worker = "alive" if process_alive(record.pid) else "-"
+        age = format_age(now - record.created_at)
+        if isinstance(record.spec, AfterSpec):
+            limit = record.spec.seconds
+        elif isinstance(record.spec, RunSpec):
+            limit = record.spec.timeout
+        elif isinstance(record.spec, UntilSpec):
+            limit = record.spec.timeout
+        else:
+            limit = None
+        age_limit = f"{age}/{format_age(limit)}" if limit is not None else age
         rows.append(
             (
                 record.id,
                 record.kind.value,
                 record.state.value,
-                format_age(now - record.created_at),
+                age_limit,
                 worker,
             )
         )

@@ -22,14 +22,18 @@ ID_D = "00000000-0000-4000-8000-000000000004"
 
 
 def record(
-    wait_id: str, thread_id: str, kind: str = "after", state: str = "waiting"
+    wait_id: str,
+    thread_id: str,
+    kind: str = "after",
+    state: str = "waiting",
+    run_timeout: Optional[float] = 60.0,
 ) -> Dict[str, object]:
     specs: Dict[str, object] = {
         "probe": None,
         "after": {"seconds": 3600.0, "registered_at": time.time()},
         "run": {
             "command": ["echo", "hello world"],
-            "timeout": 60.0,
+            "timeout": run_timeout,
             "max_retries": 2,
             "retry_delay": 5.0,
         },
@@ -89,11 +93,15 @@ class LongWaitCliTest(unittest.TestCase):
         )
 
     def test_list_scopes_human_and_json_output(self) -> None:
-        self.write(record(ID_A, "thread-a"))
+        current = record(ID_A, "thread-a")
+        current["created_at"] = time.time() - 65
+        self.write(current)
         self.write(record(ID_B, "thread-b"))
 
         scoped = self.run_cli("list").stdout
         self.assertIn("Waits of current thread thread-a (1/2):", scoped)
+        self.assertIn("AGE/LIMIT", scoped)
+        self.assertIn("1m/1h", scoped)
         self.assertIn(ID_A, scoped)
         self.assertNotIn(ID_B, scoped)
         self.assertEqual(
@@ -112,6 +120,12 @@ class LongWaitCliTest(unittest.TestCase):
             "All waits on current machine (2):",
             self.run_cli("list", thread_id=None).stdout,
         )
+
+    def test_list_omits_limit_suffix_when_unset(self) -> None:
+        self.write(record(ID_A, "thread-a", "run", run_timeout=None))
+
+        row = self.run_cli("list").stdout.splitlines()[-1]
+        self.assertNotIn("/", row)
 
     def test_empty_list_retains_scope(self) -> None:
         self.assertEqual(
