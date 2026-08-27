@@ -30,6 +30,7 @@ Clean target shape wins over legacy continuity unless user explicitly requires c
 ## Failure Handling
 
 - Hate silent fallback. No swallowed errors, hidden defaults, temp workaround branches.
+- Do not translate obvious runtime errors into lower-fidelity messages. Preserve original errors unless adding specific context or a real fix path.
 - Prefer explicit error with precise fix path.
 
 ## Guardrails
