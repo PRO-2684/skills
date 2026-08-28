@@ -1,0 +1,4 @@
+interface:
+  display_name: "Download Papers"
+  short_description: "Download IEEE PDFs through institutional access"
+  default_prompt: "Use $download-papers to download these IEEE document IDs into an output directory."
