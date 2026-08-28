@@ -17,7 +17,7 @@ import sys
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Dict, Iterator, List, Mapping, Optional, Union
@@ -96,9 +96,6 @@ class AfterSpec:
     seconds: float
     registered_at: float
 
-    def to_dict(self) -> Dict[str, object]:
-        return {"seconds": self.seconds, "registered_at": self.registered_at}
-
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> AfterSpec:
         return cls(
@@ -113,14 +110,6 @@ class RunSpec:
     timeout: Optional[float]
     max_retries: int
     retry_delay: float
-
-    def to_dict(self) -> Dict[str, object]:
-        return {
-            "command": self.command,
-            "timeout": self.timeout,
-            "max_retries": self.max_retries,
-            "retry_delay": self.retry_delay,
-        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> RunSpec:
@@ -144,13 +133,6 @@ class UntilSpec:
     command: List[str]
     timeout: float
     interval: float
-
-    def to_dict(self) -> Dict[str, object]:
-        return {
-            "command": self.command,
-            "timeout": self.timeout,
-            "interval": self.interval,
-        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> UntilSpec:
@@ -182,17 +164,9 @@ class WaitResult:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, object]:
-        value: Dict[str, object] = {"kind": self.kind.value, "status": self.status}
-        for key, item in (
-            ("reason", self.reason),
-            ("attempts", self.attempts),
-            ("checks", self.checks),
-            ("elapsed_seconds", self.elapsed_seconds),
-            ("error", self.error),
-        ):
-            if item is not None:
-                value[key] = item
-        return value
+        value: Dict[str, object] = asdict(self)
+        value["kind"] = self.kind.value
+        return {key: item for key, item in value.items() if item is not None}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> WaitResult:
@@ -226,27 +200,11 @@ class WaitRecord:
     delivered_at: Optional[float] = None
 
     def to_dict(self) -> Dict[str, object]:
-        if isinstance(self.spec, (AfterSpec, RunSpec, UntilSpec)):
-            spec: object = self.spec.to_dict()
-        else:
-            spec = None
-        return {
-            "id": self.id,
-            "thread_id": self.thread_id,
-            "kind": self.kind.value,
-            "spec": spec,
-            "message": self.message,
-            "delivery_assumption": self.delivery_assumption,
-            "state": self.state.value,
-            "pid": self.pid,
-            "child_pid": self.child_pid,
-            "created_at": self.created_at,
-            "condition_at": self.condition_at,
-            "delivered_at": self.delivered_at,
-            "log_path": self.log_path,
-            "result": self.result.to_dict() if self.result else None,
-            "error": self.error,
-        }
+        value: Dict[str, object] = asdict(self)
+        value["kind"] = self.kind.value
+        value["state"] = self.state.value
+        value["result"] = self.result.to_dict() if self.result else None
+        return value
 
     def public_dict(self) -> Dict[str, object]:
         value = self.to_dict()

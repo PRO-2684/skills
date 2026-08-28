@@ -157,6 +157,22 @@ class LongWaitCliTest(unittest.TestCase):
             "Predicate: test -f /tmp/done", self.run_cli("status", ID_D).stdout
         )
 
+    def test_json_round_trip_preserves_compact_result(self) -> None:
+        value = record(ID_A, "thread-a", "run")
+        result = {
+            "kind": "run",
+            "status": 0,
+            "reason": "exited",
+            "attempts": 1,
+            "elapsed_seconds": 1.25,
+        }
+        value["result"] = result
+        self.write(value)
+
+        structured = json.loads(self.run_cli("status", ID_A, "--json").stdout)
+        self.assertEqual(structured["result"], result)
+        self.assertIn("child_pid", structured)
+
     def test_cancel_resolve_and_cleanup_render_human_and_json(self) -> None:
         self.write(record(ID_A, "thread-a"))
         self.assertEqual(
