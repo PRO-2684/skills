@@ -194,7 +194,6 @@ class WaitRecord:
     log_path: str
     description: Optional[str] = None
     pid: Optional[int] = None
-    child_pid: Optional[int] = None
     result: Optional[WaitResult] = None
     error: Optional[str] = None
     condition_at: Optional[float] = None
@@ -239,7 +238,6 @@ class WaitRecord:
             delivery_assumption=required_str(data, "delivery_assumption"),
             state=WaitState(required_str(data, "state")),
             pid=optional_int(data, "pid"),
-            child_pid=optional_int(data, "child_pid"),
             created_at=required_float(data, "created_at"),
             condition_at=optional_float(data, "condition_at"),
             delivered_at=optional_float(data, "delivered_at"),
@@ -605,17 +603,15 @@ def register(
             raise RuntimeError(
                 f"probe {wait_id} not accepted: {record.state.value}: {record.error}"
             )
-    else:
-        try:
-            pid = spawn_worker(wait_id, Path(record.log_path))
-            with store.edit(wait_id) as editable:
-                editable.pid = pid
-        except Exception as error:
-            with store.edit(wait_id) as editable:
-                editable.state = WaitState.FAILED
-                editable.error = str(error)
-            raise
-    return store.load(wait_id)
+        return record
+    try:
+        record.pid = spawn_worker(wait_id, Path(record.log_path))
+    except Exception as error:
+        with store.edit(wait_id) as editable:
+            editable.state = WaitState.FAILED
+            editable.error = str(error)
+        raise
+    return record
 
 
 def cancelled(store: WaitStore, wait_id: str) -> bool:
@@ -671,20 +667,14 @@ def run_result(store: WaitStore, wait_id: str, spec: RunSpec) -> Optional[WaitRe
             return timeout_result(started, attempts)
         attempts += 1
         process = subprocess.Popen(spec.command, start_new_session=True)
-        with store.edit(wait_id) as record:
-            record.child_pid = process.pid
         while process.poll() is None:
             if cancelled(store, wait_id):
                 stop_process(process)
                 return None
             if deadline is not None and time.time() >= deadline:
                 stop_process(process)
-                with store.edit(wait_id) as record:
-                    record.child_pid = None
                 return timeout_result(started, attempts)
             time.sleep(0.5)
-        with store.edit(wait_id) as record:
-            record.child_pid = None
         code = process.returncode
         status = code if code >= 0 else 128 - code
         if status == 0 or attempts > spec.max_retries:
@@ -722,16 +712,12 @@ def until_result(
             )
         checks += 1
         process = subprocess.Popen(spec.command, start_new_session=True)
-        with store.edit(wait_id) as record:
-            record.child_pid = process.pid
         while process.poll() is None:
             if cancelled(store, wait_id):
                 stop_process(process)
                 return None
             if time.time() >= deadline:
                 stop_process(process)
-                with store.edit(wait_id) as record:
-                    record.child_pid = None
                 return WaitResult(
                     kind=WaitKind.UNTIL,
                     status=124,
@@ -740,8 +726,6 @@ def until_result(
                     elapsed_seconds=round(time.time() - started, 3),
                 )
             time.sleep(0.5)
-        with store.edit(wait_id) as record:
-            record.child_pid = None
         code = process.returncode
         status = code if code >= 0 else 128 - code
         if status != 1:
@@ -793,8 +777,11 @@ def worker(store: WaitStore, wait_id: str) -> int:
 
 def cancel(store: WaitStore, wait_id: str) -> WaitRecord:
     with store.edit(wait_id) as record:
-        if record.state in {WaitState.DELIVERED, WaitState.CANCELLED}:
+        if record.state == WaitState.CANCELLED:
             return record
+        cancellable = {WaitState.PENDING, WaitState.WAITING, WaitState.READY}
+        if record.state not in cancellable:
+            raise RuntimeError(f"cannot cancel wait in state {record.state.value}")
         record.state = WaitState.CANCELLED
         record.error = "cancelled"
     return store.load(wait_id)
@@ -1041,47 +1028,29 @@ def main() -> int:
     args = parser.parse_args()
     store = WaitStore(codex_home() / "long-waits")
     try:
-        if args.action == "probe":
-            record = register(
-                store,
-                WaitKind.PROBE,
-                None,
-                args.message,
-                args.description,
-            )
-            print_record(record, args.json, "Wait registered:")
-        elif args.action == "after":
-            record = register(
-                store,
-                WaitKind.AFTER,
-                AfterSpec(seconds=args.duration, registered_at=time.time()),
-                args.message,
-                args.description,
-            )
-            print_record(record, args.json, "Wait registered:")
-        elif args.action == "run":
-            record = register(
-                store,
-                WaitKind.RUN,
-                RunSpec(
+        if args.action in {"probe", "after", "run", "until"}:
+            kind = WaitKind(args.action)
+            if kind == WaitKind.PROBE:
+                spec: WaitSpec = None
+            elif kind == WaitKind.AFTER:
+                spec = AfterSpec(seconds=args.duration, registered_at=time.time())
+            elif kind == WaitKind.RUN:
+                spec = RunSpec(
                     command=command_value(args.command),
                     timeout=args.timeout,
                     max_retries=args.max_retries,
                     retry_delay=args.retry_delay,
-                ),
-                args.message,
-                args.description,
-            )
-            print_record(record, args.json, "Wait registered:")
-        elif args.action == "until":
-            record = register(
-                store,
-                WaitKind.UNTIL,
-                UntilSpec(
+                )
+            else:
+                spec = UntilSpec(
                     command=command_value(args.command),
                     timeout=args.timeout,
                     interval=args.interval,
-                ),
+                )
+            record = register(
+                store,
+                kind,
+                spec,
                 args.message,
                 args.description,
             )

@@ -265,7 +265,7 @@ class LongWaitCliTest(unittest.TestCase):
 
         structured = json.loads(self.run_cli("status", ID_A, "--json").stdout)
         self.assertEqual(structured["result"], result)
-        self.assertIn("child_pid", structured)
+        self.assertNotIn("child_pid", structured)
 
     def test_cancel_resolve_and_cleanup_render_human_and_json(self) -> None:
         self.write(record(ID_A, "thread-a"))
@@ -279,6 +279,9 @@ class LongWaitCliTest(unittest.TestCase):
         )
 
         self.write(record(ID_B, "thread-a", state="delivery_unknown"))
+        refused = self.run_cli("cancel", ID_B, check=False)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("cannot cancel wait in state delivery_unknown", refused.stderr)
         resolved = self.run_cli("resolve", ID_B, "delivered").stdout
         self.assertEqual(resolved, f"Resolved (delivered) {ID_B}: state=delivered.\n")
 
