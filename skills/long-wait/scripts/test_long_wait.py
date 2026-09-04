@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
-SCRIPT = Path(__file__).with_name("long_wait.py")
+SCRIPT = Path(__file__).resolve().with_name("long_wait.py")
 ID_A = "00000000-0000-4000-8000-000000000001"
 ID_B = "00000000-0000-4000-8000-000000000002"
 ID_C = "00000000-0000-4000-8000-000000000003"
@@ -76,10 +76,17 @@ class LongWaitCliTest(unittest.TestCase):
         (self.store / f"{value['id']}.json").write_text(json.dumps(value))
 
     def run_cli(
-        self, *args: str, thread_id: Optional[str] = "thread-a", check: bool = True
+        self,
+        *args: str,
+        thread_id: Optional[str] = "thread-a",
+        check: bool = True,
+        cwd: Optional[Path] = None,
+        codex_bin: Optional[Path] = None,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["CODEX_HOME"] = str(self.home)
+        if codex_bin is not None:
+            environment["CODEX_BIN"] = str(codex_bin)
         if thread_id is None:
             environment.pop("CODEX_THREAD_ID", None)
         else:
@@ -90,7 +97,60 @@ class LongWaitCliTest(unittest.TestCase):
             capture_output=True,
             text=True,
             env=environment,
+            cwd=cwd,
         )
+
+    def test_run_inherits_registration_cwd(self) -> None:
+        task = self.home / "task"
+        scripts = task / "scripts"
+        scripts.mkdir(parents=True)
+        predicate = scripts / "predicate.py"
+        predicate.write_text(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            "time.sleep(0.2)\n"
+            "Path('ran').touch()\n"
+        )
+        predicate.chmod(0o700)
+        fake_codex = self.home / "codex"
+        fake_codex.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            "  app-server)\n"
+            "    while IFS= read -r request; do\n"
+            '      case "$request" in\n'
+            '        *\'"method":"initialize"\'*) printf \'%s\\n\' \'{"id":1,"result":{}}\' ;;\n'
+            '        *\'"method":"thread/read"\'*) printf \'%s\\n\' \'{"id":2,"result":{"thread":{"ephemeral":false,"source":"cli"}}}\' ;;\n'
+            "      esac\n"
+            "    done\n"
+            "    ;;\n"
+            "  queue) exit 0 ;;\n"
+            "esac\n"
+        )
+        fake_codex.chmod(0o700)
+
+        registered = json.loads(
+            self.run_cli(
+                "run",
+                "--json",
+                "--timeout",
+                "5s",
+                "--",
+                "scripts/predicate.py",
+                cwd=task,
+                codex_bin=fake_codex,
+            ).stdout
+        )
+        deadline = time.time() + 5
+        while not (task / "ran").exists() and time.time() < deadline:
+            time.sleep(0.05)
+
+        self.assertTrue((task / "ran").exists())
+        record_path = self.store / f"{registered['id']}.json"
+        while record_path.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(record_path.exists())
 
     def test_list_scopes_human_and_json_output(self) -> None:
         current = record(ID_A, "thread-a")

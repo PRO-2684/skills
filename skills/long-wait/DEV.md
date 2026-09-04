@@ -3,7 +3,10 @@
 ## Flow
 
 Registration captures `CODEX_THREAD_ID`, writes one JSON record, then starts one
-detached worker. Worker waits without model activity. Terminal result runs:
+detached worker. The worker inherits registration cwd so relative `run` and
+`until` command paths keep task-local meaning. Artifact paths remain explicitly
+rooted under `${CODEX_HOME:-~/.codex}/long-waits/`. Worker waits without model
+activity. Terminal result runs:
 
 ```bash
 codex queue --thread THREAD_ID --message ENVELOPE

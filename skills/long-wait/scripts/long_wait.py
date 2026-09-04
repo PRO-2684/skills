@@ -558,7 +558,6 @@ def spawn_worker(wait_id: str, log_path: Path) -> int:
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            cwd=codex_home() / "long-waits",
             start_new_session=True,
             close_fds=True,
         )

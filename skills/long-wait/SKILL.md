@@ -5,15 +5,18 @@ description: Defer unattended work until time passes or a command reaches a term
 
 # Long Wait
 
-Run `scripts/long_wait.py` from this skill directory. Primary agent only.
-Requires Linux or macOS. Native Windows is unsupported.
+Run `scripts/long_wait.py` by absolute path from the task's working directory;
+do not change into this skill directory first. Relative workload paths inherit
+that working directory. Primary agent only. Requires Linux or macOS. Native
+Windows is unsupported.
 
 ```bash
-python3 scripts/long_wait.py probe
-python3 scripts/long_wait.py after 6h
-python3 scripts/long_wait.py run --timeout 2d -- command arg
-python3 scripts/long_wait.py run --max-retries 10 --retry-delay 30s -- idempotent-command
-python3 scripts/long_wait.py until --timeout 2d --interval 1m -- predicate arg
+LONG_WAIT_SCRIPT=/absolute/path/to/long-wait/scripts/long_wait.py
+python3 "$LONG_WAIT_SCRIPT" probe
+python3 "$LONG_WAIT_SCRIPT" after 6h
+python3 "$LONG_WAIT_SCRIPT" run --timeout 2d -- command arg
+python3 "$LONG_WAIT_SCRIPT" run --max-retries 10 --retry-delay 30s -- idempotent-command
+python3 "$LONG_WAIT_SCRIPT" until --timeout 2d --interval 1m -- predicate arg
 ```
 
 Modes:
