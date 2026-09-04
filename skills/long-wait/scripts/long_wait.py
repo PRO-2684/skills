@@ -192,6 +192,7 @@ class WaitRecord:
     state: WaitState
     created_at: float
     log_path: str
+    description: Optional[str] = None
     pid: Optional[int] = None
     child_pid: Optional[int] = None
     result: Optional[WaitResult] = None
@@ -243,6 +244,7 @@ class WaitRecord:
             condition_at=optional_float(data, "condition_at"),
             delivered_at=optional_float(data, "delivered_at"),
             log_path=required_str(data, "log_path"),
+            description=optional_str(data, "description"),
             result=result,
             error=optional_str(data, "error"),
         )
@@ -506,6 +508,8 @@ def queue_message(record: WaitRecord) -> subprocess.CompletedProcess[str]:
         "status": record.result.status,
         "result": record.result.to_dict(),
     }
+    if record.description:
+        payload["description"] = record.description
     log_path = Path(record.log_path)
     if log_path.exists() and log_path.stat().st_size:
         payload["log_path"] = record.log_path
@@ -569,6 +573,7 @@ def register(
     kind: WaitKind,
     spec: WaitSpec,
     message: str,
+    description: Optional[str],
 ) -> WaitRecord:
     thread_id = os.environ.get("CODEX_THREAD_ID")
     if not thread_id:
@@ -587,6 +592,7 @@ def register(
         state=WaitState.PENDING,
         created_at=time.time(),
         log_path=str(store.root / f"{wait_id}.log"),
+        description=description,
     )
     store.create(record)
     if kind == WaitKind.PROBE:
@@ -825,15 +831,25 @@ def resolve(
     return store.load(wait_id)
 
 
-def format_age(seconds: float) -> str:
+def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
-    if seconds < 60:
-        return f"{seconds}s"
-    if seconds < 3600:
-        return f"{seconds // 60}m"
-    if seconds < 86400:
-        return f"{seconds // 3600}h"
-    return f"{seconds // 86400}d"
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        parts = ((days, "d"), (hours, "h"), (minutes, "m"))
+    elif hours:
+        parts = ((hours, "h"), (minutes, "m"))
+    elif minutes:
+        parts = ((minutes, "m"), (seconds, "s"))
+    else:
+        parts = ((seconds, "s"),)
+    return "".join(f"{value}{suffix}" for value, suffix in parts if value) or "0s"
+
+
+def format_description(description: Optional[str]) -> str:
+    value = " ".join(description.split()) if description else ""
+    return value if len(value) <= 48 else value[:47] + "…"
 
 
 def format_record(record: WaitRecord, heading: str) -> str:
@@ -843,26 +859,27 @@ def format_record(record: WaitRecord, heading: str) -> str:
         f"  Kind: {record.kind.value}",
         f"  State: {record.state.value}",
         f"  Thread: {record.thread_id}",
-        f"  Age: {format_age(time.time() - record.created_at)}",
+        f"  Age: {format_duration(time.time() - record.created_at)}",
         f"  Worker: {'alive' if process_alive(record.pid) else '-'}",
+        f"  Description: {record.description or '-'}",
     ]
     if isinstance(record.spec, AfterSpec):
-        lines.append(f"  Delay: {format_age(record.spec.seconds)}")
+        lines.append(f"  Delay: {format_duration(record.spec.seconds)}")
     elif isinstance(record.spec, RunSpec):
         lines.extend(
             (
                 f"  Command: {shlex.join(record.spec.command)}",
-                f"  Timeout: {format_age(record.spec.timeout) if record.spec.timeout is not None else '-'}",
+                f"  Timeout: {format_duration(record.spec.timeout) if record.spec.timeout is not None else '-'}",
                 f"  Max retries: {record.spec.max_retries}",
-                f"  Retry delay: {format_age(record.spec.retry_delay)}",
+                f"  Retry delay: {format_duration(record.spec.retry_delay)}",
             )
         )
     elif isinstance(record.spec, UntilSpec):
         lines.extend(
             (
                 f"  Predicate: {shlex.join(record.spec.command)}",
-                f"  Timeout: {format_age(record.spec.timeout)}",
-                f"  Interval: {format_age(record.spec.interval)}",
+                f"  Timeout: {format_duration(record.spec.timeout)}",
+                f"  Interval: {format_duration(record.spec.interval)}",
             )
         )
     if record.result is not None:
@@ -890,11 +907,11 @@ def format_waits(
         header = f"Waits of current thread {thread_id} ({len(records)}/{total}):"
     if not records:
         return f"{header}\nNo waits."
-    rows = [("ID", "KIND", "STATE", "AGE/LIMIT", "WORKER")]
+    rows = [("ID", "KIND", "STATE", "AGE/LIMIT", "WORKER", "DESCRIPTION")]
     now = time.time()
     for record in records:
         worker = "alive" if process_alive(record.pid) else "-"
-        age = format_age(now - record.created_at)
+        age = format_duration(now - record.created_at)
         if isinstance(record.spec, AfterSpec):
             limit = record.spec.seconds
         elif isinstance(record.spec, RunSpec):
@@ -903,7 +920,7 @@ def format_waits(
             limit = record.spec.timeout
         else:
             limit = None
-        age_limit = f"{age}/{format_age(limit)}" if limit is not None else age
+        age_limit = f"{age}/{format_duration(limit)}" if limit is not None else age
         rows.append(
             (
                 record.id,
@@ -911,6 +928,7 @@ def format_waits(
                 record.state.value,
                 age_limit,
                 worker,
+                format_description(record.description) or "-",
             )
         )
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
@@ -951,6 +969,10 @@ def build_parser() -> argparse.ArgumentParser:
             "--message",
             default=default_message,
             help="continuation note in wake envelope",
+        )
+        value.add_argument(
+            "--description",
+            help="human-facing description of the wait",
         )
 
     def json_arg(value: argparse.ArgumentParser) -> None:
@@ -1025,6 +1047,7 @@ def main() -> int:
                 WaitKind.PROBE,
                 None,
                 args.message,
+                args.description,
             )
             print_record(record, args.json, "Wait registered:")
         elif args.action == "after":
@@ -1033,6 +1056,7 @@ def main() -> int:
                 WaitKind.AFTER,
                 AfterSpec(seconds=args.duration, registered_at=time.time()),
                 args.message,
+                args.description,
             )
             print_record(record, args.json, "Wait registered:")
         elif args.action == "run":
@@ -1046,6 +1070,7 @@ def main() -> int:
                     retry_delay=args.retry_delay,
                 ),
                 args.message,
+                args.description,
             )
             print_record(record, args.json, "Wait registered:")
         elif args.action == "until":
@@ -1058,6 +1083,7 @@ def main() -> int:
                     interval=args.interval,
                 ),
                 args.message,
+                args.description,
             )
             print_record(record, args.json, "Wait registered:")
         elif args.action == "list":

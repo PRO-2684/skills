@@ -27,10 +27,11 @@ def record(
     kind: str = "after",
     state: str = "waiting",
     run_timeout: Optional[float] = 60.0,
+    after_seconds: float = 3600.0,
 ) -> Dict[str, object]:
     specs: Dict[str, object] = {
         "probe": None,
-        "after": {"seconds": 3600.0, "registered_at": time.time()},
+        "after": {"seconds": after_seconds, "registered_at": time.time()},
         "run": {
             "command": ["echo", "hello world"],
             "timeout": run_timeout,
@@ -87,6 +88,7 @@ class LongWaitCliTest(unittest.TestCase):
         environment["CODEX_HOME"] = str(self.home)
         if codex_bin is not None:
             environment["CODEX_BIN"] = str(codex_bin)
+            environment["FAKE_QUEUE_LOG"] = str(self.home / "queue.log")
         if thread_id is None:
             environment.pop("CODEX_THREAD_ID", None)
         else:
@@ -125,7 +127,7 @@ class LongWaitCliTest(unittest.TestCase):
             "      esac\n"
             "    done\n"
             "    ;;\n"
-            "  queue) exit 0 ;;\n"
+            '  queue) printf \'%s\\n\' "$*" > "$FAKE_QUEUE_LOG" ;;\n'
             "esac\n"
         )
         fake_codex.chmod(0o700)
@@ -136,12 +138,15 @@ class LongWaitCliTest(unittest.TestCase):
                 "--json",
                 "--timeout",
                 "5s",
+                "--description",
+                "Run relative predicate",
                 "--",
                 "scripts/predicate.py",
                 cwd=task,
                 codex_bin=fake_codex,
             ).stdout
         )
+        self.assertEqual(registered["description"], "Run relative predicate")
         deadline = time.time() + 5
         while not (task / "ran").exists() and time.time() < deadline:
             time.sleep(0.05)
@@ -151,17 +156,24 @@ class LongWaitCliTest(unittest.TestCase):
         while record_path.exists() and time.time() < deadline:
             time.sleep(0.05)
         self.assertFalse(record_path.exists())
+        self.assertIn(
+            '"description":"Run relative predicate"',
+            (self.home / "queue.log").read_text(),
+        )
 
     def test_list_scopes_human_and_json_output(self) -> None:
         current = record(ID_A, "thread-a")
         current["created_at"] = time.time() - 65
+        current["description"] = "Train baseline model"
         self.write(current)
         self.write(record(ID_B, "thread-b"))
 
         scoped = self.run_cli("list").stdout
         self.assertIn("Waits of current thread thread-a (1/2):", scoped)
         self.assertIn("AGE/LIMIT", scoped)
-        self.assertIn("1m/1h", scoped)
+        self.assertIn("1m5s/1h", scoped)
+        self.assertIn("DESCRIPTION", scoped)
+        self.assertIn("Train baseline model", scoped)
         self.assertIn(ID_A, scoped)
         self.assertNotIn(ID_B, scoped)
         self.assertEqual(
@@ -186,6 +198,28 @@ class LongWaitCliTest(unittest.TestCase):
 
         row = self.run_cli("list").stdout.splitlines()[-1]
         self.assertNotIn("/", row)
+
+    def test_list_shows_verbose_day_age(self) -> None:
+        value = record(ID_A, "thread-a", after_seconds=172800.0)
+        value["created_at"] = time.time() - 98700
+        self.write(value)
+
+        self.assertIn("1d3h25m/2d", self.run_cli("list").stdout)
+
+    def test_description_is_full_in_status_and_compact_in_list(self) -> None:
+        description = "A human-facing description that is deliberately longer than forty-eight characters"
+        value = record(ID_A, "thread-a")
+        value["description"] = description
+        self.write(value)
+
+        self.assertIn(
+            f"Description: {description}", self.run_cli("status", ID_A).stdout
+        )
+        self.assertEqual(
+            json.loads(self.run_cli("status", ID_A, "--json").stdout)["description"],
+            description,
+        )
+        self.assertIn(description[:47] + "…", self.run_cli("list").stdout)
 
     def test_empty_list_retains_scope(self) -> None:
         self.assertEqual(

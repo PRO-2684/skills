@@ -52,7 +52,14 @@ status.
 
 The list table's `AGE/LIMIT` column combines record age with the configured
 `after` delay or overall `run`/`until` timeout. When no limit exists, it shows
-age alone.
+age alone. Durations floor elapsed time and show seconds below one minute,
+minutes plus seconds below one hour, hours plus minutes below one day, and days
+plus hours and minutes thereafter.
+
+Optional `description` is human-facing and distinct from the continuation
+`message`. Registration and `status` show it in full. `list` collapses whitespace
+and truncates it to 48 characters; JSON retains the full value. Wake envelopes
+include it when set. Records predating this field load it as null.
 
 Scripts and agents needing a stable machine-readable contract must pass
 `--json`. This is an intentional PoC output change; no generic format-selection
