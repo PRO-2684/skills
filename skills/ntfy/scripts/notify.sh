@@ -4,7 +4,7 @@ set -euo pipefail
 fail() { printf '%s\n' "$*" >&2; exit 2; }
 
 if [[ -z ${NTFY_TOPIC:-} ]]; then
-  fail 'NTFY_TOPIC is unset or empty. Generate it once: export NTFY_TOPIC="agent-$(uuidgen)". Save the literal value in your shell startup file, subscribe to that topic in ntfy, and relaunch the agent with it exported. See SKILL.md for setup commands.'
+  fail 'NTFY_TOPIC is unset or empty. Try source ~/.profile if it exists, then recheck and retry in the same shell. If still missing, ask the user to configure a topic; see SKILL.md for setup commands.'
 fi
 [[ $NTFY_TOPIC =~ ^[A-Za-z0-9_-]+$ ]] || fail 'NTFY_TOPIC must contain only letters, digits, underscores, or hyphens; use a topic name, not a URL.'
 (( $# >= 1 && $# <= 4 )) || fail 'Usage: notify.sh MESSAGE [TITLE [PRIORITY [TAGS]]]'

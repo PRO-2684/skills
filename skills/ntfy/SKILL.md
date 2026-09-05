@@ -10,8 +10,9 @@ Requires Bash and curl.
 
 ## Setup
 
-If `NTFY_TOPIC` is unset or empty, abort the notification and suggest generating
-a topic and save it:
+If `NTFY_TOPIC` is unset or empty, source `~/.profile` if it exists, then recheck
+the variable and send in that same shell. If still missing, stop the send and
+ask the user to generate and save a topic:
 
 ```bash
 export NTFY_TOPIC="agent-$(uuidgen)"
