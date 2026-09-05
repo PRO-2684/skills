@@ -1,0 +1,4 @@
+interface:
+  display_name: "ntfy"
+  short_description: "Send user notifications through ntfy.sh"
+  default_prompt: "Use $ntfy to notify me when this task finishes."

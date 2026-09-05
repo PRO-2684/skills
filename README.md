@@ -30,6 +30,7 @@ ln -s path/to/repo/skills/cyber-mysophobia ~/.codex/skills/cyber-mysophobia
 | [Dependency Archaeology](./skills/dependency-archaeology) | `dependency-archaeology` | Resolve dependency conflicts and make project environments reproducible | [dependency-archaeology.webp](./images/dependency-archaeology.webp) |
 | [Download Papers](./skills/download-papers)               | `download-papers`        | Download IEEE PDFs through institutional browser access                 |                                                                     |
 | [Long Wait](./skills/long-wait)                           | `long-wait`              | Resume the same Codex thread after a long-running external condition    | [long-wait.webp](./images/long-wait.webp)                           |
+| [ntfy](./skills/ntfy)                                    | `ntfy`                   | Send push notifications through ntfy.sh using `NTFY_TOPIC`              |                                                                     |
 | [Search Papers](./skills/search-papers)                   | `search-papers`          | Find conference papers before arXiv preprints                           | [search-papers.webp](./images/search-papers.webp)                   |
 
 <details><summary>Archived</summary>
